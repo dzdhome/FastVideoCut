@@ -30,7 +30,7 @@ struct AppSettings
 {
     std::wstring ffmpegDir;
     std::wstring outputDir;
-    std::wstring mergeFileName   = L"merged.mp4";
+    // 合并输出的文件名不再由设置决定，而是按首尾视频自动生成（见 MakeMergeName）
 
     // blackdetect parameters
     double blackMinDuration      = 0.10;

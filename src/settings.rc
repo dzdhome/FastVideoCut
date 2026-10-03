@@ -19,8 +19,6 @@ BEGIN
     EDITTEXT   IDC_SET_OUTDIR, 68, 24, 196, 12, ES_AUTOHSCROLL
     PUSHBUTTON "浏览...", IDC_SET_OUTBROWSE, 270, 23, 60, 15
 
-    LTEXT      "合并文件名", -1, 8, 41, 58, 10
-    EDITTEXT   IDC_SET_NAME, 68, 40, 130, 12, ES_AUTOHSCROLL
 
     LTEXT      "---- 黑屏检测 blackdetect ----", -1, 8, 62, 200, 10
     LTEXT      "最短时长(秒)", -1, 8, 76, 80, 10

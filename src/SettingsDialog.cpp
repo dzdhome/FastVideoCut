@@ -75,8 +75,7 @@ namespace
     {
         SetText(dlg, IDC_SET_FFDIR, s.ffmpegDir);
         SetText(dlg, IDC_SET_OUTDIR, s.outputDir);
-        SetText(dlg, IDC_SET_NAME, s.mergeFileName);
-        SetText(dlg, IDC_SET_MINDUR, NumberText(s.blackMinDuration, 2));
+            SetText(dlg, IDC_SET_MINDUR, NumberText(s.blackMinDuration, 2));
         SetText(dlg, IDC_SET_PIXTH, NumberText(s.blackPixTh, 2));
         SetText(dlg, IDC_SET_PICTH, NumberText(s.blackPicTh, 2));
         SetText(dlg, IDC_SET_EDGESCAN, NumberText(s.blackEdgeScan, 0));
@@ -132,8 +131,7 @@ namespace
 
                 s->ffmpegDir = GetText(dlg, IDC_SET_FFDIR);
                 s->outputDir = GetText(dlg, IDC_SET_OUTDIR);
-                std::wstring name = GetText(dlg, IDC_SET_NAME);
-                if (!name.empty()) s->mergeFileName = name;
+                // 合并文件名已改为按首尾视频自动生成，这里不再有输入框
 
                 s->blackMinDuration = GetDouble(dlg, IDC_SET_MINDUR, s->blackMinDuration);
                 s->blackPixTh       = GetDouble(dlg, IDC_SET_PIXTH, s->blackPixTh);

@@ -853,6 +853,10 @@ bool Ffmpeg::Concat(const std::vector<std::wstring>& parts, const std::wstring& 
     a.push_back(L"-f");         a.push_back(L"concat");
     a.push_back(L"-safe");      a.push_back(L"0");
     a.push_back(L"-i");         a.push_back(listFile);
+    // 只取每段的默认视频/音频流。源文件可能带内嵌封面（mp4/mkv 的 attached_pic
+    // 图像流），不显式映射时它会被一起搬进输出，个别容器下还会直接报错。
+    a.push_back(L"-map");       a.push_back(L"0:v:0");
+    a.push_back(L"-map");       a.push_back(L"0:a:0?");
 
     if (!enc.reencode)
     {
@@ -905,7 +909,14 @@ bool Ffmpeg::Normalize(const std::wstring& in, const std::wstring& out,
     a.push_back(L"-nostdin");
     a.push_back(L"-loglevel"); a.push_back(L"error");
     a.push_back(L"-i");        a.push_back(in);
-    if (!hasAudio)
+    // 同上：只取默认视频/音频流，内嵌封面（attached_pic）不参与重编码，
+    // 否则 ffmpeg 会把封面当成第二路视频流而报错。
+    a.push_back(L"-map");      a.push_back(L"0:v:0");
+    if (hasAudio)
+    {
+        a.push_back(L"-map");  a.push_back(L"0:a:0");
+    }
+    else
     {
         a.push_back(L"-f");    a.push_back(L"lavfi");
         a.push_back(L"-i");    a.push_back(L"anullsrc=r=48000:cl=stereo");

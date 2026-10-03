@@ -8,8 +8,8 @@ IDI_APPICON ICON "app.ico"
 // note: must be the numeric ID 1 (RT_VERSION) - Windows' version API does not
 // look up a resource named "VS_VERSION_INFO"
 1 VERSIONINFO
- FILEVERSION 1,0,0,0
- PRODUCTVERSION 1,0,0,0
+ FILEVERSION 1,1,0,0
+ PRODUCTVERSION 1,1,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS 0x40004L
@@ -22,12 +22,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "FastVideoCut"
             VALUE "FileDescription", "FastVideoCut - ffmpeg based black frame cutter and lossless trimmer"
-            VALUE "FileVersion", "1.0.0.0"
+            VALUE "FileVersion", "1.1.0.0"
             VALUE "InternalName", "FastVideoCut"
             VALUE "LegalCopyright", "Copyright (C) 2026 dzdhome. Licensed under the GNU General Public License v3.0 or later. This is free software: you are free to change and redistribute it. There is NO WARRANTY, to the extent permitted by law."
             VALUE "OriginalFilename", "FastVideoCut.exe"
             VALUE "ProductName", "FastVideoCut"
-            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "ProductVersion", "1.1.0.0"
         END
     END
     BLOCK "VarFileInfo"

@@ -95,7 +95,6 @@ bool LoadSettings(AppSettings& s)
 
     s.ffmpegDir      = IniGetString(f, L"ffmpeg", L"dir", s.ffmpegDir);
     s.outputDir      = IniGetString(f, L"export", L"outputDir", s.outputDir);
-    s.mergeFileName  = IniGetString(f, L"export", L"mergeFileName", s.mergeFileName);
 
     s.blackMinDuration = IniGetDouble(f, L"blackdetect", L"minDuration", s.blackMinDuration);
     s.blackPixTh       = IniGetDouble(f, L"blackdetect", L"pixTh", s.blackPixTh);
@@ -134,7 +133,7 @@ bool SaveSettings(const AppSettings& s)
 
     IniSetString(f, L"ffmpeg", L"dir", tmp.ffmpegDir);
     IniSetString(f, L"export", L"outputDir", tmp.outputDir);
-    IniSetString(f, L"export", L"mergeFileName", tmp.mergeFileName);
+    // 合并文件名不再有设置项（按首尾视频自动生成），无需迁移
     IniSetString(f, L"export", L"preset", Utf8ToWide(tmp.preset));
     IniSetInt(f, L"export", L"crf", tmp.crf);
     IniSetBool(f, L"export", L"reencode", tmp.reencodeExport);

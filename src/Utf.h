@@ -86,5 +86,16 @@ std::string  FormatSecondsUtf8(double seconds, int decimals = 3);
 bool         ParseTimecode(const std::wstring& text, double& out);
 std::wstring NumberText(double value, int decimals = 3);
 
+// --------------------------- merge output name -------------------------------
+// Builds the merged file name from the first and last video: a shared prefix is
+// written once and the two remainders are joined with '-'.
+//   001 + 010       -> 001-010.mp4
+//   视频001 + 视频010 -> 视频001-010.mp4
+//   第1集 + 第2集     -> 第1集-第2集.mp4      (nothing in common)
+// Extensions on the inputs are ignored; `ext` is appended to the result.
+std::wstring MakeMergeName(const std::wstring& firstName,
+                           const std::wstring& lastName,
+                           const std::wstring& ext = L".mp4");
+
 template <class T>
 inline T ClampValue(T v, T lo, T hi) { return v < lo ? lo : (v > hi ? hi : v); }

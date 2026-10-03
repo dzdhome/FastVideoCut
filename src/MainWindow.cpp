@@ -58,7 +58,7 @@ namespace
         { IDB_REMOVE,     L"移除",       L"移除列表中选中的视频" },
         { IDB_UP,         L"上移",       L"把选中的视频在列表里上移" },
         { IDB_DOWN,       L"下移",       L"把选中的视频在列表里下移" },
-        { IDB_DETECT,     L"检测黑屏",   L"用 ffmpeg blackdetect 检测所有视频的黑屏位置 (F6)" },
+        { IDB_DETECT,     L"自动分析",   L"用 ffmpeg blackdetect 自动分析所有视频的黑屏位置 (F6)" },
         { IDB_EXPORT,     L"导出剪辑",   L"按选择导出：单文件裁剪或按顺序合并 (F7)" },
         { IDB_CLEARCACHE, L"清理缩略图", L"清除磁盘上的缩略图缓存（下次重新生成）" },
         { IDB_SETTINGS,   L"设置",       L"配置 ffmpeg 路径、黑屏检测参数与导出参数" },
@@ -455,6 +455,7 @@ void MainWindow::LayoutChildren()
     int progW   = MulDiv(190, s, 96);
 
     // ---- toolbar ---------------------------------------------------------
+    // 顺序与 kButtons 一致：添加/移除/上移/下移/自动分析/导出/清理缩略图/设置/说明/列表
     int widths[] = { 96, 62, 62, 62, 92, 92, 104, 62, 62, 74 };
     int x = pad;
     for (int i = 0; i < buttonCount_; ++i)
@@ -751,7 +752,10 @@ void MainWindow::EnsureVisibleItem(int index)
     ::SendMessageW(list_, LVM_ENSUREVISIBLE, (WPARAM)index, FALSE);
 }
 
-void MainWindow::RebuildList()
+// 重建整个列表。selectRow >= 0 时把该行设为选中（移动/排序后要保持选中项
+// 跟着视频走；传 -1 表示不主动选中，由调用方自己处理）。
+// 之前这里无条件选中第 0 行，导致上移/下移后高亮跑回顶部，看起来像“选中没跟着走”。
+void MainWindow::RebuildList(int selectRow)
 {
     if (!list_) return;
     ::SendMessageW(list_, LVM_DELETEALLITEMS, 0, 0);
@@ -766,14 +770,27 @@ void MainWindow::RebuildList()
         ::SendMessageW(list_, LVM_INSERTITEMW, 0, (LPARAM)&item);
         UpdateListRow((int)i);
     }
-    if (!project_.items.empty())
+
+    int row = selectRow;
+    if (row < 0 && !project_.items.empty()) row = 0;   // 默认仍选中第一行
+    if (row >= 0 && row < (int)project_.items.size())
     {
+        // 先清空所有选中/焦点，再只选中目标行：多选或旧选中残留都会让高亮看起来错位
         LVITEMW item;
+        ::ZeroMemory(&item, sizeof(item));
+        item.mask = LVIF_STATE;
+        item.state = 0;
+        item.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+        ::SendMessageW(list_, LVM_SETITEMSTATE, (WPARAM)-1, (LPARAM)&item);
+
         ::ZeroMemory(&item, sizeof(item));
         item.mask = LVIF_STATE;
         item.state = LVIS_SELECTED | LVIS_FOCUSED;
         item.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-        ::SendMessageW(list_, LVM_SETITEMSTATE, 0, (LPARAM)&item);
+        ::SendMessageW(list_, LVM_SETITEMSTATE, (WPARAM)row, (LPARAM)&item);
+        ::SendMessageW(list_, LVM_ENSUREVISIBLE, (WPARAM)row, FALSE);
+
+        timeline_.SetCurrentItem(row);
     }
 }
 
@@ -815,12 +832,10 @@ void MainWindow::UpdateTitles()
     int n = (int)project_.items.size();
     double total = project_.TotalDuration();
     double keep = project_.SelectedDuration();
-    int black = 0;
-    for (size_t i = 0; i < project_.items.size(); ++i) black += project_.items[i].blackCount();
-
+    // 标题栏不再显示黑屏段数（导出前的分析中间量，对用户没有决策价值）
     std::wstring title = FormatString(
-        L"FastVideoCut - %d 个视频 | 总时长 %s | 保留 %s | 黑屏 %d 段",
-        n, FormatClock(total).c_str(), FormatClock(keep).c_str(), black);
+        L"FastVideoCut - %d 个视频 | 总时长 %s | 保留 %s",
+        n, FormatClock(total).c_str(), FormatClock(keep).c_str());
     ::SetWindowTextW(hwnd_, title.c_str());
 
     std::wstring ffName = ffmpeg_.available()
@@ -1175,13 +1190,8 @@ void MainWindow::OnCommand(int id)
         int sel = SelectedItem();
         if (project_.MoveUp(sel))
         {
-            RebuildList();
-            LVITEMW item;
-            ::ZeroMemory(&item, sizeof(item));
-            item.mask = LVIF_STATE;
-            item.state = LVIS_SELECTED | LVIS_FOCUSED;
-            item.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-            ::SendMessageW(list_, LVM_SETITEMSTATE, sel - 1, (LPARAM)&item);
+            // 视频已经换到上一行，选中必须跟着它走，否则高亮留在原地造成错觉
+            RebuildList(sel - 1);
             timeline_.Refresh();
         }
         break;
@@ -1193,13 +1203,7 @@ void MainWindow::OnCommand(int id)
         int sel = SelectedItem();
         if (project_.MoveDown(sel))
         {
-            RebuildList();
-            LVITEMW item;
-            ::ZeroMemory(&item, sizeof(item));
-            item.mask = LVIF_STATE;
-            item.state = LVIS_SELECTED | LVIS_FOCUSED;
-            item.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-            ::SendMessageW(list_, LVM_SETITEMSTATE, sel + 1, (LPARAM)&item);
+            RebuildList(sel + 1);
             timeline_.Refresh();
         }
         break;
@@ -1207,7 +1211,7 @@ void MainWindow::OnCommand(int id)
 
     case IDM_VID_SORTNAME:
         project_.SortByName();
-        RebuildList();
+        RebuildList(SelectedItem());
         timeline_.Refresh();
         break;
 
@@ -1890,9 +1894,25 @@ bool MainWindow::BuildOutputs(int job,
             concatEnc.reencode = false;     // 归一化之后可以无损拼接
         }
 
-        std::wstring name = SanitizeFileName(settings_.mergeFileName);
-        if (name.empty()) name = L"merged.mp4";
-        if (PathGetExtension(name).empty()) name += L".mp4";
+        // 合并文件名按“第一个 + 最后一个”视频自动生成（公共前缀只写一次）：
+        // 001…010 -> 001-010.mp4；视频001…视频010 -> 视频001-010.mp4。
+        // 只统计真正参与合并的视频（跳过了裁剪的、没有保留片段的都不算）。
+        std::wstring firstName, lastName;
+        for (size_t i = 0; i < project_.items.size(); ++i)
+        {
+            const VideoItem& it = project_.items[i];
+            if (it.selectedSegmentCount() == 0) continue;
+            if (firstName.empty()) firstName = it.name;
+            lastName = it.name;
+        }
+        if (firstName.empty() && !concatInputs.empty())
+        {
+            firstName = concatInputs.front();
+            lastName  = concatInputs.back();
+        }
+
+        std::wstring name = SanitizeFileName(MakeMergeName(firstName, lastName, L".mp4"));
+        if (name.empty() || name == L".mp4" || name == L"merged") name = L"merged.mp4";
 
         std::wstring out = UniquePath(PathCombine(outDir, name));
         std::wstring listFile = PathCombine(workDir, L"concat_list.txt");
@@ -1988,7 +2008,7 @@ void MainWindow::ShowInfoDialog()
         L"FastVideoCut 使用说明\n"
         L"─────────────────────────────\n"
         L"1) 添加视频：点“添加视频”或把文件/文件夹直接拖进窗口。每个视频占一行。\n\n"
-        L"2) 检测黑屏：点“检测黑屏”（F6）。程序用 ffmpeg 的 blackdetect 滤镜找出每一段黑屏的\n"
+        L"2) 自动分析：点“自动分析”（F6）。程序用 ffmpeg 的 blackdetect 滤镜找出每一段黑屏的\n"
         L"   起止时间与长度，显示在“时长/黑屏段/黑屏时长”列，并直接画在帧流上\n"
         L"   （红色斜纹 = 黑屏段）。黑屏只是帮你快速找到“片头片尾”与“主体”的\n"
         L"   分界线，它本身并不是要删掉的内容。\n"

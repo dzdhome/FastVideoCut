@@ -30,7 +30,7 @@ New-Item -ItemType Directory -Force $outDir | Out-Null
 # always built -O2 so it still produces readable assertion output.
 $cxxflags = @('-std=c++17', '-Wall', '-Wextra', '-DUNICODE', '-D_UNICODE')
 if ($Release) {
-    $cxxflags += @('-O3', '-flto', '-fno-exceptions', '-DNDEBUG', '-DVERSION="1.0.0"')
+    $cxxflags += @('-O3', '-flto', '-fno-exceptions', '-DNDEBUG', '-DVERSION="1.1.0"')
     # GCC's LTO pass reports -Wstringop-overread on std::wstring(L"") passed to
     # PostUiMessage (reading the NUL of an empty literal). Harmless, only noise.
     $cxxflags += '-Wno-stringop-overread'

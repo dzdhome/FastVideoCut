@@ -856,7 +856,7 @@ void TimelineView::DrawEmptyState(HDC dc, const RECT& rc)
 
     const wchar_t* line1 = L"把视频文件拖到这里，或点击左上角“添加视频”";
     const wchar_t* line2 = L"支持 mp4 / mkv / mov / avi / flv / ts / wmv ...";
-    const wchar_t* line3 = L"检测黑屏后可点击帧流上的分段进行选择（选中=保留）";
+    const wchar_t* line3 = L"自动分析后可点击帧流上的分段进行选择（选中=保留）";
 
     RECT r = rc;
     r.top = rc.top + (rc.bottom - rc.top) / 2 - 46;
@@ -1021,7 +1021,7 @@ void TimelineView::DrawRow(HDC dc, int index, const RECT& rc)
             RECT txt = ph;
             const wchar_t* msg = (it.status == ItemStatus::Error)
                                      ? L"读取失败"
-                                     : L"待检测黑屏（点击工具栏“检测黑屏”）";
+                                     : L"待自动分析";
             ::DrawTextW(dc, msg, -1, &txt, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         }
         else

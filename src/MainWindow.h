@@ -94,7 +94,7 @@ private:
     void ApplyListMode(bool save);
 
     // ---- list view -------------------------------------------------------
-    void RebuildList();
+    void RebuildList(int selectRow = -1);
     void UpdateListRow(int index);
     void UpdateTitles();
     int  SelectedItem() const;

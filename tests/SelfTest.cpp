@@ -89,6 +89,56 @@ int wmain(int argc, wchar_t** argv)
     Check(ParseTimecode(L"12.5", t) && Nearly(t, 12.5, 1e-6), "ParseTimecode seconds");
     Check(EscapeConcatPath(L"C:\\a b\\c.mp4") == L"file 'C:\\a b\\c.mp4'", "EscapeConcatPath");
 
+    // ---- merged output name: first + last video, shared prefix written once ---
+    Check(MakeMergeName(L"001", L"010") == L"001-010.mp4",
+          "001 + 010 -> 001-010.mp4", MakeMergeName(L"001", L"010"));
+    Check(MakeMergeName(L"\u89c6\u9891001", L"\u89c6\u9891010") == L"\u89c6\u9891001-010.mp4",
+          "shared CJK prefix kept once",
+          MakeMergeName(L"\u89c6\u9891001", L"\u89c6\u9891010"));
+    // 第1集 / 第2集 share the prefix "第", which is folded away once.
+    Check(MakeMergeName(L"\u7b2c1\u96c6", L"\u7b2c2\u96c6") == L"\u7b2c1\u96c6-2\u96c6.mp4",
+          "shared CJK prefix folded once",
+          MakeMergeName(L"\u7b2c1\u96c6", L"\u7b2c2\u96c6"));
+    Check(MakeMergeName(L"aaa", L"bbb") == L"aaa-bbb.mp4",
+          "no shared prefix -> plain join",
+          MakeMergeName(L"aaa", L"bbb"));
+    Check(MakeMergeName(L"clip_1", L"clip_2") == L"clip_1-2.mp4",
+          "partial ASCII prefix",
+          MakeMergeName(L"clip_1", L"clip_2"));
+    Check(MakeMergeName(L"C:\\a\\001.mp4", L"D:\\b\\010.mkv") == L"001-010.mp4",
+          "paths and extensions are stripped",
+          MakeMergeName(L"C:\\a\\001.mp4", L"D:\\b\\010.mkv"));
+    Check(MakeMergeName(L"movie", L"movie") == L"movie.mp4",
+          "identical names collapse",
+          MakeMergeName(L"movie", L"movie"));
+    Check(MakeMergeName(L"abc", L"abcd") == L"abcd.mp4",
+          "prefix covering one name leaves no dangling dash",
+          MakeMergeName(L"abc", L"abcd"));
+    Check(MakeMergeName(L"", L"010") == L"010.mp4",
+          "empty first name falls back",
+          MakeMergeName(L"", L"010"));
+    Check(MakeMergeName(L"001", L"") == L"001.mp4",
+          "empty last name falls back",
+          MakeMergeName(L"001", L""));
+    Check(MakeMergeName(L"", L"") == L"merged.mp4",
+          "both empty -> merged",
+          MakeMergeName(L"", L""));
+    Check(MakeMergeName(L"001", L"010", L"mkv") == L"001-010.mkv",
+          "extension is honoured",
+          MakeMergeName(L"001", L"010", L"mkv"));
+    {
+        // U+1F3AC (clapper board) written as UTF-8, then widened, so the literal
+        // does not rely on a surrogate-pair escape (not valid in C++).
+        const unsigned char clapper[] = { 0xF0, 0x9F, 0x8E, 0xAC };
+        std::wstring emojiPrefix;
+        for (size_t i = 0; i < sizeof(clapper); ++i)
+            emojiPrefix += (wchar_t)clapper[i];
+        std::wstring a = emojiPrefix + L"001";
+        std::wstring b = emojiPrefix + L"010";
+        std::wstring emoji = MakeMergeName(a, b);
+        Check(emoji == a + L"-010.mp4", "emoji prefix stays intact", emoji);
+    }
+
     std::vector<BlackRange> parsed;
     std::string fake =
         "[Parsed_blackdetect_0 @ 0x1] black_start:6 black_end:8 black_duration:2\n"
@@ -703,6 +753,100 @@ int wmain(int argc, wchar_t** argv)
             Check(shortAll.size() == all.size(),
                   "clip shorter than 2x the window is scanned completely");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // 12. embedded cover art (mp4 attached_pic) must not leak into the output
+    // -----------------------------------------------------------------------
+    ::wprintf(L"\n[12] embedded cover art\n");
+    {
+        // Build a clip carrying an extra mjpeg stream marked attached_pic. It has
+        // to go in as an attachment rather than a mapped stream, otherwise the
+        // cover takes over the container duration.
+        std::wstring jpg = PathCombine(outDir, L"cover.jpg");
+        std::wstring src = PathCombine(outDir, L"cover_src.mp4");
+        std::wstring outT = PathCombine(outDir, L"cover_trim.mp4");
+        std::wstring outC = PathCombine(outDir, L"cover_merge.mp4");
+        std::wstring outN = PathCombine(outDir, L"cover_norm.mp4");
+        std::wstring lst  = PathCombine(outDir, L"cover_list.txt");
+        ::DeleteFileW(jpg.c_str());
+        ::DeleteFileW(src.c_str());
+        ::DeleteFileW(outT.c_str());
+        ::DeleteFileW(outC.c_str());
+        ::DeleteFileW(outN.c_str());
+
+        // Counts streams flagged attached_pic; 1 means "this file has a cover".
+        struct CoverCounter
+        {
+            static int Count(const Ffmpeg& ffm, const std::wstring& file)
+            {
+                if (!FileExists(file)) return -1;
+                std::wstring args = L"-v error -show_entries ";
+                args += L"stream=index:stream_disposition=attached_pic -of default=nw=1 ";
+                args += QuoteArg(file);
+                ProcessResult pr;
+                if (!RunProcessCapture(ffm.paths().ffprobe, args, std::wstring(),
+                                       CancelToken(), pr) || pr.exitCode != 0)
+                    return -1;
+                int n = 0;
+                const std::string& o = pr.output;
+                size_t pos = 0;
+                while ((pos = o.find("attached_pic=1", pos)) != std::string::npos)
+                {
+                    ++n;
+                    pos += 14;
+                }
+                return n;
+            }
+        };
+
+        ProcessResult pr;
+
+        std::wstring jpgCmd = L"-y -hide_banner -loglevel error ";
+        jpgCmd += L"-f lavfi -i color=c=red:s=240x240:d=1:r=1 -frames:v 1 -update 1 ";
+        jpgCmd += QuoteArg(jpg);
+        RunProcessCapture(ff.paths().ffmpeg, jpgCmd, std::wstring(), CancelToken(), pr);
+        Check(pr.exitCode == 0 && FileExists(jpg), "built the cover image",
+              Utf8ToWide(pr.output));
+
+        std::wstring addCmd = L"-y -hide_banner -loglevel error -i ";
+        addCmd += QuoteArg(media[0]) + L" -i " + QuoteArg(jpg);
+        addCmd += L" -map 0 -map 1 -c copy -c:v:1 mjpeg -disposition:v:1 attached_pic ";
+        addCmd += QuoteArg(src);
+        RunProcessCapture(ff.paths().ffmpeg, addCmd, std::wstring(), CancelToken(), pr);
+
+        VideoInfo ci;
+        Check(FileExists(src) && ff.Probe(src, ci, err), "built a clip with a cover",
+              Utf8ToWide(pr.output) + Utf8ToWide(err));
+        Check(CoverCounter::Count(ff, src) == 1,
+              "source really carries one cover stream");
+
+        EncodeOptions cEnc;                       // lossless stream copy
+
+        Check(ff.Trim(src, 0.0, 4.0, outT, cEnc, err), "trim of a covered clip",
+              Utf8ToWide(err));
+        Check(FileExists(outT) && CoverCounter::Count(ff, outT) == 0,
+              "trim drops the embedded cover");
+
+        std::vector<std::wstring> parts;
+        parts.push_back(src);
+        Check(ff.Concat(parts, lst, outC, cEnc, err), "concat of covered clips",
+              Utf8ToWide(err));
+        Check(FileExists(outC) && CoverCounter::Count(ff, outC) == 0,
+              "concat drops the embedded cover");
+
+        EncodeOptions nEnc;
+        nEnc.reencode = true;
+        nEnc.preset   = "ultrafast";
+        Check(ff.Normalize(src, outN, 320, 180, 25.0, true, nEnc, err),
+              "normalize of a covered clip", Utf8ToWide(err));
+        Check(FileExists(outN) && CoverCounter::Count(ff, outN) == 0,
+              "normalize drops the embedded cover");
+
+        VideoInfo oi;
+        if (ff.Probe(outT, oi, err))
+            Check(Nearly(oi.duration, 4.0, 0.6), "trim output keeps the cut duration",
+                  FormatString(L"%.2fs", oi.duration).c_str());
     }
 
     // -----------------------------------------------------------------------

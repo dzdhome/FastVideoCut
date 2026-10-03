@@ -229,6 +229,86 @@ std::wstring PathGetExtension(const std::wstring& path)
     return ToLowerW(name.substr(pos));
 }
 
+// ---------------------------------------------------------------------------
+// MakeMergeName - merged output name built from the first and last video.
+//
+// Both inputs may be a full path and may carry an extension; both are reduced
+// to their base names first. The longest shared prefix is emitted once and the
+// two remainders follow, joined with '-':
+//     001       + 010      -> 001-010.mp4
+//     视频001    + 视频010   -> 视频001-010.mp4
+//     clip_1    + clip_2   -> clip_1-2.mp4
+//     第1集     + 第2集     -> 第1集-2集.mp4
+//     同样的视频  + 同样的视频  -> 同样的视频.mp4
+// A shared run of digits is handed back to both sides, since the digits are
+// part of the serial number ("001" + "010" stays "001-010").
+// separator, and a common prefix is never allowed to cut a UTF-16 surrogate or
+// CJK character in half.
+// ---------------------------------------------------------------------------
+std::wstring MakeMergeName(const std::wstring& firstName,
+                           const std::wstring& lastName,
+                           const std::wstring& ext)
+{
+    std::wstring a = PathGetFileNameNoExt(firstName);
+    std::wstring b = PathGetFileNameNoExt(lastName);
+
+    std::wstring base;
+    if (a.empty() && b.empty())  base = L"merged";
+    else if (a.empty())          base = b;
+    else if (b.empty())          base = a;
+    else if (a == b)             base = a;      // identical names, nothing to join
+    else
+    {
+        size_t common = 0;
+        size_t maxc = (std::min)(a.size(), b.size());
+        while (common < maxc && a[common] == b[common]) ++common;
+
+        // Never cut a character in half (low/high surrogate, CJK lead vs trail).
+        while (common > 0 && common < maxc)
+        {
+            wchar_t c = a[common];
+            if ((c & 0xFC00) != 0xDC00) break;
+            --common;
+        }
+
+        // A shared run of digits belongs to the serial number, not to a name
+        // A shared run of digits belongs to the serial number, not to a name
+        // prefix: "001" + "010" must stay "001-010" and 视频001 + 视频010
+        // must stay 视频001-010. The digits continuing past a text prefix are
+        // part of the number on both sides, so hand that shared digit run back.
+        // 第1集 + 第2集 stops right after the text prefix 第 and yields
+        // 第1集-2集.
+        while (common > 0 && a[common - 1] >= L'0' && a[common - 1] <= L'9')
+            --common;
+
+        std::wstring head  = a.substr(0, common);
+        std::wstring tailA = a.substr(common);
+        std::wstring tailB = b.substr(common);
+
+        if (head.empty())
+        {
+            base = tailA + L"-" + tailB;
+        }
+        else
+        {
+            // The prefix already completes the first name, so it needs a single
+            // separator only in front of the second remainder:
+            // "clip_" + "1"/"2" -> "clip_1-2", "abc" + "d" -> "abcd".
+            base = head + tailA;
+            if (!tailA.empty() && !tailB.empty()) base += L"-";
+            base += tailB;
+        }
+    }
+
+    if (!ext.empty())
+    {
+        if (ext[0] != L'.') base += L".";
+        base += ext;
+    }
+    return base;
+}
+
+
 std::wstring PathGetFull(const std::wstring& path)
 {
     wchar_t buf[MAX_PATH * 2];

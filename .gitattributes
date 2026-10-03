@@ -1,0 +1,17 @@
+# 仓库内统一使用 LF，避免不同平台签出时产生整文件 diff
+* text=auto eol=lf
+
+# Windows 专用文件保留 CRLF
+*.ps1 text eol=crlf
+*.rc  text eol=crlf
+*.bat text eol=crlf
+
+# 二进制
+*.ico  binary
+*.exe  binary
+*.mp4  binary
+*.bmp  binary
+*.zip  binary
+
+# 许可证保持 LF（官方原文是纯 ASCII，逐行可比对）
+LICENSE text eol=lf

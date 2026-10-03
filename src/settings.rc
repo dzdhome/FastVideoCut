@@ -1,0 +1,50 @@
+// ---------------------------------------------------------------------------
+// settings.rc - settings dialog (loaded with DialogBoxParam, no hand built
+// binary template any more - the DLGITEMTEMPLATE layout is easy to get wrong)
+// ---------------------------------------------------------------------------
+#pragma code_page(65001)
+#include <windows.h>
+#include "resource.h"
+
+IDD_SETTINGS DIALOG 0, 0, 340, 254
+STYLE DS_SETFONT|DS_MODALFRAME|DS_CENTER|WS_POPUP|WS_CAPTION|WS_SYSMENU
+CAPTION "FastVideoCut 设置"
+FONT 9, "Microsoft YaHei UI"
+BEGIN
+    LTEXT      "ffmpeg 目录", -1, 8, 9, 58, 10
+    EDITTEXT   IDC_SET_FFDIR, 68, 8, 196, 12, ES_AUTOHSCROLL
+    PUSHBUTTON "浏览...", IDC_SET_FFBROWSE, 270, 7, 60, 15
+
+    LTEXT      "输出目录", -1, 8, 25, 58, 10
+    EDITTEXT   IDC_SET_OUTDIR, 68, 24, 196, 12, ES_AUTOHSCROLL
+    PUSHBUTTON "浏览...", IDC_SET_OUTBROWSE, 270, 23, 60, 15
+
+    LTEXT      "合并文件名", -1, 8, 41, 58, 10
+    EDITTEXT   IDC_SET_NAME, 68, 40, 130, 12, ES_AUTOHSCROLL
+
+    LTEXT      "---- 黑屏检测 blackdetect ----", -1, 8, 62, 200, 10
+    LTEXT      "最短时长(秒)", -1, 8, 76, 80, 10
+    EDITTEXT   IDC_SET_MINDUR, 92, 75, 54, 12, ES_AUTOHSCROLL
+    LTEXT      "像素阈值 pix_th", -1, 156, 76, 84, 10
+    EDITTEXT   IDC_SET_PIXTH, 246, 75, 54, 12, ES_AUTOHSCROLL
+    LTEXT      "比例阈值 pic_th", -1, 8, 92, 84, 10
+    EDITTEXT   IDC_SET_PICTH, 92, 91, 54, 12, ES_AUTOHSCROLL
+    LTEXT      "缩略图高(像素)", -1, 156, 92, 90, 10
+    EDITTEXT   IDC_SET_THUMBH, 246, 91, 54, 12, ES_AUTOHSCROLL
+    LTEXT      "只扫片头/片尾(秒)", -1, 8, 108, 130, 10
+    EDITTEXT   IDC_SET_EDGESCAN, 140, 107, 44, 12, ES_AUTOHSCROLL
+    LTEXT      "0 = 整段扫描", -1, 190, 108, 140, 10
+
+    LTEXT      "---- 导出参数 ----", -1, 8, 126, 200, 10
+    AUTOCHECKBOX "导出时重新编码（默认关闭 = ffmpeg 无损流复制）", IDC_SET_REENC, 8, 140, 260, 10
+    LTEXT      "CRF", -1, 8, 156, 30, 10
+    EDITTEXT   IDC_SET_CRF, 40, 155, 40, 12, ES_AUTOHSCROLL
+    LTEXT      "preset", -1, 92, 156, 40, 10
+    EDITTEXT   IDC_SET_PRESET, 134, 155, 80, 12, ES_AUTOHSCROLL
+    AUTOCHECKBOX "mp4 输出加 +faststart（网络快启，略微增加耗时）", IDC_SET_FASTSTART, 8, 172, 260, 10
+    AUTOCHECKBOX "导出完成后询问是否打开输出文件夹", IDC_SET_CONFIRM, 8, 188, 260, 10
+
+    PUSHBUTTON "恢复默认", IDC_SET_RESET, 8, 206, 62, 15
+    DEFPUSHBUTTON "确定", IDOK, 208, 206, 60, 15
+    PUSHBUTTON "取消", IDCANCEL, 272, 206, 60, 15
+END

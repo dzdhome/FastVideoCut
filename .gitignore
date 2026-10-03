@@ -1,0 +1,29 @@
+# 构建产物与自测输出（_test 是脚本生成的输出目录，不入库）
+_test/
+
+# Release 构建输出（.exe 已被下面的规则覆盖，这里挡住目录本身）
+dist/
+build/
+_test/
+
+# Release 构建输出（.exe 已被下面的规则覆盖，这里挡住目录本身）
+dist/
+build/
+
+# 编辑器 / 系统
+.vs/
+.vscode/
+*.user
+*.suo
+*.o
+*.obj
+*.exe
+*.pdb
+*.ilk
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# 运行时产物
+*.log
+*.ini

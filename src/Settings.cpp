@@ -140,6 +140,10 @@ bool LoadSettings(AppSettings& s)
 
     s.lastAddDir = IniGetString(f, L"ui", L"lastAddDir", s.lastAddDir);
 
+    // 提示音开关单独放一节，跟界面/导出参数分开
+    s.soundDetectDone = IniGetBool(f, L"sound", L"detectDone", s.soundDetectDone);
+    s.soundExportDone = IniGetBool(f, L"sound", L"exportDone", s.soundExportDone);
+
     if (s.thumbHeight < 24) s.thumbHeight = 24;
     if (s.thumbHeight > 240) s.thumbHeight = 240;
     if (s.crf < 0) s.crf = 0;
@@ -186,5 +190,8 @@ bool SaveSettings(const AppSettings& s)
     IniSetBool(f, L"ui", L"makeThumbs", tmp.makeThumbs);
     IniSetInt(f, L"ui", L"lang", (int)tmp.lang);
     IniSetString(f, L"ui", L"lastAddDir", tmp.lastAddDir);
+
+    IniSetBool(f, L"sound", L"detectDone", tmp.soundDetectDone);
+    IniSetBool(f, L"sound", L"exportDone", tmp.soundExportDone);
     return true;
 }

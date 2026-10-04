@@ -22,6 +22,7 @@
 // ---------------------------------------------------------------------------
 #include "SettingsDialog.h"
 #include "Loc.h"
+#include "Sound.h"
 #include "resource.h"
 
 #include <shlobj.h>
@@ -97,6 +98,8 @@ namespace
         SetText(dlg, IDC_SET_LB_EXPORT,   TR(L"---- 导出参数 ----", L"---- Export ----"));
         SetText(dlg, IDC_SET_LB_CRF,      L"CRF");
         SetText(dlg, IDC_SET_LB_PRESET,   L"preset");
+        SetText(dlg, IDC_SET_LB_SOUND,
+                TR(L"---- 提示音 ----", L"---- Sounds ----"));
 
         SetText(dlg, IDC_SET_FFBROWSE,  TR(L"浏览...", L"Browse..."));
         SetText(dlg, IDC_SET_OUTBROWSE, TR(L"浏览...", L"Browse..."));
@@ -116,6 +119,12 @@ namespace
         SetText(dlg, IDC_SET_CONFIRM,
                 TR(L"导出完成后询问是否打开输出文件夹",
                    L"Ask to open the output folder when finished"));
+        SetText(dlg, IDC_SET_SOUNDDETECT,
+                TR(L"分析完成后响“叮铃铃”（全部视频分析完时）",
+                   L"Ring \"ding-ding-ding\" when analysis finishes"));
+        SetText(dlg, IDC_SET_SOUNDEXPORT,
+                TR(L"导出完成后响“叮咚咚”（文件导出完时）",
+                   L"Ring \"ding-dong\" when the export finishes"));
     }
 
     void SelectLang(HWND dlg, AppLang lang)
@@ -153,6 +162,8 @@ namespace
         ::CheckDlgButton(dlg, IDC_SET_REENC, s.reencodeExport ? BST_CHECKED : BST_UNCHECKED);
         ::CheckDlgButton(dlg, IDC_SET_FASTSTART, s.faststart ? BST_CHECKED : BST_UNCHECKED);
         ::CheckDlgButton(dlg, IDC_SET_CONFIRM, s.confirmBeforeExport ? BST_CHECKED : BST_UNCHECKED);
+        ::CheckDlgButton(dlg, IDC_SET_SOUNDDETECT, s.soundDetectDone ? BST_CHECKED : BST_UNCHECKED);
+        ::CheckDlgButton(dlg, IDC_SET_SOUNDEXPORT, s.soundExportDone ? BST_CHECKED : BST_UNCHECKED);
     }
 
     INT_PTR CALLBACK SettingsProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
@@ -194,6 +205,16 @@ namespace
                 FillControls(dlg, def);
                 return TRUE;
             }
+            // 勾上提示音就当场响一声：整个程序里只有这里能试听，
+            // 否则用户只能等到任务跑完才知道自己打开的是什么声音。
+            case IDC_SET_SOUNDDETECT:
+                if (::IsDlgButtonChecked(dlg, IDC_SET_SOUNDDETECT) == BST_CHECKED)
+                    Sound::PlayDetectDone();
+                return TRUE;
+            case IDC_SET_SOUNDEXPORT:
+                if (::IsDlgButtonChecked(dlg, IDC_SET_SOUNDEXPORT) == BST_CHECKED)
+                    Sound::PlayExportDone();
+                return TRUE;
             case IDOK:
             {
                 if (!s) { ::EndDialog(dlg, IDCANCEL); return TRUE; }
@@ -241,6 +262,8 @@ namespace
                 s->faststart           = ::IsDlgButtonChecked(dlg, IDC_SET_FASTSTART) == BST_CHECKED;
                 s->confirmBeforeExport = ::IsDlgButtonChecked(dlg, IDC_SET_CONFIRM) == BST_CHECKED;
                 s->makeThumbs          = ::IsDlgButtonChecked(dlg, IDC_SET_THUMBS) == BST_CHECKED;
+                s->soundDetectDone     = ::IsDlgButtonChecked(dlg, IDC_SET_SOUNDDETECT) == BST_CHECKED;
+                s->soundExportDone     = ::IsDlgButtonChecked(dlg, IDC_SET_SOUNDEXPORT) == BST_CHECKED;
 
                 // 语言：下拉框里的 3 项顺序与 AppLang 的取值一致
                 HWND cb = ::GetDlgItem(dlg, IDC_SET_LANG);

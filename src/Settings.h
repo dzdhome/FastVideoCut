@@ -56,6 +56,13 @@ struct AppSettings
     // 少跑一遍 ffmpeg 抽帧 + 拼图，长视频列表明显更快。
     bool   makeThumbs            = false;
 
+    // 任务完成提示音（设置里可以单独开关，见 Sound.h）
+    //   soundDetectDone = 全部分析完成后响“叮铃铃”
+    //   soundExportDone  = 导出完成后响“叮咚咚”
+    // 默认都开：分析/导出动辄几分钟，等的时候人在别的窗口，响一声才知道完了。
+    bool   soundDetectDone       = true;
+    bool   soundExportDone       = true;
+
     // export
     bool   reencodeExport        = false;    // false => lossless stream copy
     bool   mergeReencode         = false;    // re-encode when sources mismatch

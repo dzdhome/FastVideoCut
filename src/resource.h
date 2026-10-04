@@ -120,3 +120,6 @@
 #define IDC_SET_LB_EXPORT      42042
 #define IDC_SET_LB_CRF         42043
 #define IDC_SET_LB_PRESET      42044
+#define IDC_SET_LB_SOUND       42045   // “---- 提示音 ----” 分组标签
+#define IDC_SET_SOUNDDETECT    42046   // 全部分析完成后响“叮铃铃”
+#define IDC_SET_SOUNDEXPORT    42047   // 导出完成后响“叮咚咚”

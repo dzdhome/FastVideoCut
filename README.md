@@ -47,6 +47,12 @@ Win32 / C++17 桌面工具：用 `ffmpeg` 做**黑屏自动检测**、**帧流�
 - **缩略图可关（默认关）** — 设置里的「生成视频流缩略图」默认**不勾选**：黑屏检测本身
   不需要画面，此时只跑 `blackdetect`，不抽帧、不拼图，视频多或长视频时明显更快。
   勾上以后帧流会即时开始生成马赛克；关掉时「清理缩略图」按钮与菜单项自动置灰
+- **任务完成提示音（默认开）** — 设置 →「提示音」里两个开关分别管两声铃声：
+  · **全部分析完成 → 「叮铃铃」**（三声上行），**导出完成 → 「叮咚咚」**（两声高中低）
+  · 声音是程序自己合成的金属音（`waveOut`，不依赖任何 wav 文件）；没接音频设备就静默跳过
+  · 在设置里勾上某一栏会**当场响一声**方便试听
+  · 只在**成功**完成时响：失败、取消不响（免得听成“成功了”）；`--nogui` / `--quit` 也不响
+  · 一串任务（例如「两个都导出」、`--auto-export` 的先分析后导出）只在**最后一步**响一次，不叠音
 - **界面语言：简体中文 / English** — 设置 →「界面语言」，默认「跟随系统」：
   第一次启动按系统区域设置自动选中文（`zh-*`）或英文，之后按你的选择固定。
   切换后**立即生效、不用重启**（菜单、工具栏、列表表头、状态栏、帮助行、
@@ -157,8 +163,8 @@ $env:FASTVIDEOCUT_FFMPEG='C:\ffmpeg\bin'
 
 ```
 src/        主程序（Utf / Process / Ffmpeg / Project / Settings / Loc / Timeline /
-            MainWindow / SettingsDialog / Preview / main + app.rc + settings.rc +
-            resource.h）
+            Sound / MainWindow / SettingsDialog / Preview / main + app.rc +
+            settings.rc + resource.h）
 tests/      SelfTest 控制台自测
 _test/      构建产物、obj、测试媒体与导出样例（不入库）
 ```

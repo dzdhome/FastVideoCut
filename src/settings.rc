@@ -6,7 +6,7 @@
 #include <windows.h>
 #include "resource.h"
 
-IDD_SETTINGS DIALOG 0, 0, 340, 272
+IDD_SETTINGS DIALOG 0, 0, 340, 320
 STYLE DS_SETFONT|DS_MODALFRAME|DS_CENTER|WS_POPUP|WS_CAPTION|WS_SYSMENU
 CAPTION "FastVideoCut 设置"
 FONT 9, "Microsoft YaHei UI"
@@ -48,7 +48,11 @@ BEGIN
     AUTOCHECKBOX "mp4 输出加 +faststart（网络快启，略微增加耗时）", IDC_SET_FASTSTART, 8, 218, 280, 10
     AUTOCHECKBOX "导出完成后询问是否打开输出文件夹", IDC_SET_CONFIRM, 8, 234, 280, 10
 
-    PUSHBUTTON "恢复默认", IDC_SET_RESET, 8, 252, 62, 15
-    DEFPUSHBUTTON "确定", IDOK, 208, 252, 60, 15
-    PUSHBUTTON "取消", IDCANCEL, 272, 252, 60, 15
+    LTEXT      "---- 提示音 ----", IDC_SET_LB_SOUND, 8, 250, 200, 10
+    AUTOCHECKBOX "分析完成后响“叮铃铃”（全部视频分析完时）", IDC_SET_SOUNDDETECT, 8, 264, 300, 10
+    AUTOCHECKBOX "导出完成后响“叮咚咚”（文件导出完时）", IDC_SET_SOUNDEXPORT, 8, 280, 300, 10
+
+    PUSHBUTTON "恢复默认", IDC_SET_RESET, 8, 300, 62, 15
+    DEFPUSHBUTTON "确定", IDOK, 208, 300, 60, 15
+    PUSHBUTTON "取消", IDCANCEL, 272, 300, 60, 15
 END

@@ -23,6 +23,7 @@
 #include "MainWindow.h"
 #include "SettingsDialog.h"
 #include "Loc.h"
+#include "Sound.h"
 
 #include <windowsx.h>
 #include <shellapi.h>
@@ -262,6 +263,7 @@ bool MainWindow::Create(HINSTANCE hInst, const AppArgs& args)
 void MainWindow::Shutdown()
 {
     preview_.Shutdown();           // stops preview workers before anything else
+    Sound::Shutdown();            // let a ringing chime finish instead of cutting it off
     if (cancel_.ev) ::SetEvent(cancel_.ev);
     if (worker_.joinable()) worker_.join();
 
@@ -1441,13 +1443,13 @@ void MainWindow::OnCommand(int id)
 
     case IDM_HELP_ABOUT:
         ::MessageBoxW(hwnd_,
-                      TR(L"FastVideoCut 1.2.0\n\n"
+                      TR(L"FastVideoCut 1.3.0\n\n"
                          L"用 ffmpeg 做后端的黑屏自动剪辑工具：\n"
                          L"  · 黑屏检测 blackdetect\n"
                          L"  · 帧流缩略图 tile 快速展开\n"
                          L"  · 无损剪切 -c copy + concat 合并\n\n"
                          L"界面: Win32 / C++ (VC++)    后端: ffmpeg.exe",
-                         L"FastVideoCut 1.2.0\n\n"
+                         L"FastVideoCut 1.3.0\n\n"
                          L"Black frame auto cutter built on ffmpeg:\n"
                          L"  - black frame detection (blackdetect)\n"
                          L"  - timeline thumbnails via tile mosaics\n"
@@ -1706,6 +1708,20 @@ void MainWindow::OnJobFinished(int job, bool ok, const std::wstring& summary)
 
     int chain = nextJob_;
     nextJob_ = JobNone;
+
+    // 任务跑完的提示音：分析完成“叮铃铃”，导出完成“叮咚咚”（设置里可关）。
+    // 几种情况不出声：
+    //   · 失败或被取消 —— 响了反而像成功，误导；日志里已经写明结果了
+    //   · 后面还接着任务（“两个都导出”、--auto-export 的分析→导出）——
+    //     等整串任务跑完再响一次，不然两声会撞在一起
+    //   · --nogui / --quit —— 没窗口或者马上就要退出，响了也听不见
+    if (ok && chain == JobNone && !args_.noGui && !args_.quitOnEnd)
+    {
+        if (job == JobDetect && settings_.soundDetectDone)
+            Sound::PlayDetectDone();
+        else if ((job == JobCutEach || job == JobMergeAll) && settings_.soundExportDone)
+            Sound::PlayExportDone();
+    }
 
     RebuildList();
     timeline_.Refresh();

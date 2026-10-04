@@ -48,8 +48,27 @@ struct VideoInfo
     double      videoStartTime = 0.0;   // start_time of the video track
     double      audioStartTime = 0.0;   // start_time of the audio track
 
+    // colour / bit depth (shown in the list as "HDR · 10bit")
+    std::string pixFmt;                   // e.g. yuv420p10le
+    std::string colorTransfer;            // bt709 / smpte2084 (PQ) / arib-std-b67 (HLG)
+    std::string colorPrimaries;           // bt709 / bt2020
+    std::string colorSpace;               // bt709 / bt2020nc ...
+    int         bitsPerRawSample = 0;     // as reported by ffprobe (0 = unknown)
+
     bool valid() const { return duration > 0.0 && width > 0 && height > 0; }
+
+    // Bit depth per channel. Falls back to the pixel format name when
+    // bits_per_raw_sample is missing (which is the usual case for HEVC).
+    int  bitDepth() const;
+    // True for HDR content: PQ (smpte2084) or HLG (arib-std-b67).
+    bool isHdr() const;
+    std::string hdrLabel() const;         // "HDR10" / "HLG" / "SDR"
+    std::string bitDepthLabel() const;    // "10bit" / "8bit" / ""
+    std::string formatLabel() const;      // "HDR · 10bit"
 };
+
+// Derives the bit depth from a pixel format name ("yuv420p10le" -> 10).
+int BitDepthFromPixFmt(const std::string& pixFmt);
 
 struct BlackRange
 {
@@ -63,9 +82,14 @@ struct BlackParams
     double minDuration    = 0.10;   // blackdetect d=
     double pixThreshold   = 0.10;   // blackdetect pix_th=
     double picThreshold   = 0.98;   // blackdetect pic_th=
-    // Only the head and the tail of the file are scanned (intro / outro almost
-    // always end within the first/last few minutes). 0 = scan the whole file.
-    double edgeScanSec    = 180.0;
+    // Only a slice of the file is scanned (the intro / outro boundaries almost
+    // always sit near its ends). The two sides are configured on their own,
+    // because an intro is usually much shorter than the outro, or vice versa:
+    //   > 0 = only that many seconds at the head / at the tail
+    //   = 0 = that side is not scanned at all (head 180 / tail 0 = first 180 s)
+    //   < 0 = no limit on that side -> the whole file is scanned
+    double headScanSec    = 180.0;
+    double tailScanSec    = 180.0;
 };
 
 // Options for stream-copy (lossless) or re-encoded output.

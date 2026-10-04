@@ -153,6 +153,13 @@ std::wstring VideoItem::summaryText() const
                         info.width, info.height, info.fps, blackCount());
 }
 
+// HDR / SDR + 位深，例如 "HDR10 · 10bit"（未分析时为空）
+std::wstring VideoItem::formatText() const
+{
+    if (!info.valid()) return std::wstring();
+    return Utf8ToWide(info.formatLabel());
+}
+
 // ---------------------------------------------------------------------------
 // Project
 // ---------------------------------------------------------------------------

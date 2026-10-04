@@ -57,6 +57,7 @@
 #define IDM_VIEW_THUMB_SMALL   40505
 #define IDM_VIEW_LIST          40506   // 文件列表 / 视频列表 切换
 #define IDM_VID_REDETECT       40108   // 重新检测全部黑屏（不跳过已检测）
+#define IDM_VID_ANALYZE_ONE    40109   // 只重新分析选中的这一个视频
 
 // ---- controls ------------------------------------------------------------
 #define IDC_LIST               41001
@@ -96,5 +97,5 @@
 #define IDC_SET_FASTSTART      42023
 #define IDC_SET_CONFIRM        42024
 #define IDC_SET_RESET          42025
-#define IDC_SET_EDGESCAN       42026   // 只扫片头/片尾多少秒（0 = 整段）
-#define IDC_SET_FASTDETECT     42026   // 快速检测（关键帧预扫）
+#define IDC_SET_HEADSCAN       42026   // 只扫片头多少秒（0 = 该侧不限制）
+#define IDC_SET_TAILSCAN       42027   // 只扫片尾多少秒（0 = 该侧不限制）

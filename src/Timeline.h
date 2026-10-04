@@ -219,4 +219,6 @@ private:
     static const int kVScrollW   = 16;
     static const int kRowGap     = 8;
     static const int kMaxTiles   = 8;
+    // 左侧面板四行文字（标题 / 时长·分辨率·fps / 规格 / 已选段）所需的高度
+    static const int kMinRowH    = 72;
 };

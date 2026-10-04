@@ -99,7 +99,27 @@ bool LoadSettings(AppSettings& s)
     s.blackMinDuration = IniGetDouble(f, L"blackdetect", L"minDuration", s.blackMinDuration);
     s.blackPixTh       = IniGetDouble(f, L"blackdetect", L"pixTh", s.blackPixTh);
     s.blackPicTh       = IniGetDouble(f, L"blackdetect", L"picTh", s.blackPicTh);
-    s.blackEdgeScan    = IniGetDouble(f, L"blackdetect", L"edgeScan", s.blackEdgeScan);
+
+    // 迁移：旧版本只有一个 "edgeScan"（片头片尾共用），首次读到它时同步给两侧，
+    // 保证升级后用户的配置不丢；之后只写新的 headScan / tailScan。
+    {
+        wchar_t legacy[64];
+        DWORD n = ::GetPrivateProfileStringW(L"blackdetect", L"edgeScan", L"",
+                                             legacy, (DWORD)_countof(legacy), f.c_str());
+        std::wstring oldScan(legacy, n);
+        double legacyVal = s.blackHeadScan;
+        bool hasLegacy = false;
+        if (!oldScan.empty())
+        {
+            wchar_t* endp = nullptr;
+            double v = wcstod(oldScan.c_str(), &endp);
+            if (endp != oldScan.c_str()) { legacyVal = v; hasLegacy = true; }
+        }
+        s.blackHeadScan = IniGetDouble(f, L"blackdetect", L"headScan",
+                                       hasLegacy ? legacyVal : s.blackHeadScan);
+        s.blackTailScan = IniGetDouble(f, L"blackdetect", L"tailScan",
+                                       hasLegacy ? legacyVal : s.blackTailScan);
+    }
 
     s.thumbHeight    = IniGetInt(f, L"ui", L"thumbHeight", s.thumbHeight);
     s.showFileList   = IniGetBool(f, L"ui", L"showFileList", s.showFileList);
@@ -122,6 +142,14 @@ bool LoadSettings(AppSettings& s)
     if (s.blackMinDuration < 0.0) s.blackMinDuration = 0.0;
     if (s.blackPixTh < 0.0) s.blackPixTh = 0.0;
     if (s.blackPicTh < 0.0) s.blackPicTh = 0.0;
+    // 负数 = 该侧不限制（合法）；两侧都是 0 = 没有任何可扫区域，多半是 INI 被手改坏了，
+    // 退回默认值，免得点“自动分析”什么都不扫还看不出原因。
+    if (s.blackHeadScan == 0.0 && s.blackTailScan == 0.0)
+    {
+        const AppSettings def;
+        s.blackHeadScan = def.blackHeadScan;
+        s.blackTailScan = def.blackTailScan;
+    }
     return true;
 }
 
@@ -144,7 +172,9 @@ bool SaveSettings(const AppSettings& s)
     IniSetString(f, L"blackdetect", L"minDuration", NumberText(tmp.blackMinDuration, 3));
     IniSetString(f, L"blackdetect", L"pixTh", NumberText(tmp.blackPixTh, 3));
     IniSetString(f, L"blackdetect", L"picTh", NumberText(tmp.blackPicTh, 3));
-    IniSetString(f, L"blackdetect", L"edgeScan", NumberText(tmp.blackEdgeScan, 3));
+    IniSetString(f, L"blackdetect", L"headScan", NumberText(tmp.blackHeadScan, 3));
+    IniSetString(f, L"blackdetect", L"tailScan", NumberText(tmp.blackTailScan, 3));
+    IniSetString(f, L"blackdetect", L"edgeScan", L"");   // 旧键清空，避免再次迁移
 
     IniSetInt(f, L"ui", L"thumbHeight", tmp.thumbHeight);
     IniSetBool(f, L"ui", L"showFileList", tmp.showFileList);

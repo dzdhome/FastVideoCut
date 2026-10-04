@@ -48,6 +48,10 @@ enum FcJob
     JobOpenOnly  = 4
 };
 
+// 命令行扫描窗口的“未指定”哨兵：负数本身是合法的窗口值（= 该侧不限制），
+// 所以不能用 -1 表示“没给”。
+constexpr double kScanUnset = -1e9;
+
 struct AppArgs
 {
     std::wstring              ffmpegDir;
@@ -57,7 +61,10 @@ struct AppArgs
     double                    blackMin    = 0.0;
     double                    blackPix    = 0.0;
     double                    blackPic    = 0.0;
-    double                    scanWindow  = -1.0;   // -1 = 跟随设置
+    // --scan-window 同时设置两侧，--scan-head/--scan-tail 单侧覆盖。
+    double                    scanWindow  = kScanUnset;
+    double                    scanHead    = kScanUnset;
+    double                    scanTail    = kScanUnset;
     bool                      reencode    = false;
     bool                      mergeAll    = false;
     bool                      autoDetect  = false;
@@ -102,10 +109,12 @@ private:
 
     // ---- jobs ------------------------------------------------------------
     void StartDetect(bool forceAll = false);
+    // 重新分析单个视频（不影响其它已分析好的结果）
+    void StartDetectOne(int index);
     void StartExport(int job);
-    void StartJobInternal(int job, bool detectAll = false);
+    void StartJobInternal(int job, bool detectAll = false, int onlyIndex = -1);
     void CancelJob();
-    void JobThreadMain(int job, bool detectAll);
+    void JobThreadMain(int job, bool detectAll, int onlyIndex);
     bool BuildOutputs(int job,
                       std::vector<std::wstring>& segments,
                       std::vector<std::wstring>& outputs,
@@ -132,6 +141,7 @@ private:
     HWND         list_      = nullptr;
     HWND         log_       = nullptr;
     HMENU        viewMenu_  = nullptr;      // 视图菜单（切换时要更新勾选状态）
+    HMENU        vidMenu_   = nullptr;      // 视频菜单（要按任务状态禁用“重新分析选中的视频”）
     std::wstring logFilePath_;
     int          exitCode_  = 0;
     HWND         status_    = nullptr;
@@ -157,6 +167,8 @@ private:
     int                  nextJob_     = JobNone;
     std::wstring         lastOutput_;
     std::wstring         lastOutputDir_;
+    // 只分析单个视频时用（-1 = 全量/增量分析），JobThreadMain 读取
+    int                  detectOnlyIndex_ = -1;
     bool                 debugLog_    = false;
     bool                 settingsDirty_ = false;
 

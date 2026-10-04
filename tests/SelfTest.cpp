@@ -225,6 +225,36 @@ int wmain(int argc, wchar_t** argv)
     Check(info.duration > 0.0, "duration parsed");
     Check(info.hasAudio, "audio stream detected");
 
+    // ---- HDR / bit depth --------------------------------------------------
+    ::wprintf(L"       format: %hs (pix_fmt=%hs transfer=%hs)\n",
+              info.formatLabel().c_str(), info.pixFmt.c_str(),
+              info.colorTransfer.c_str());
+    Check(info.bitDepth() >= 8 && info.bitDepth() <= 16, "bit depth in range",
+          Utf8ToWide(info.bitDepthLabel()));
+    Check(!info.hdrLabel().empty(), "hdr label is never empty");
+
+    // pixel format -> bit depth (HEVC usually reports no bits_per_raw_sample)
+    Check(BitDepthFromPixFmt("yuv420p") == 0,     "yuv420p -> 8 bit by default");
+    Check(BitDepthFromPixFmt("yuv420p10le") == 10, "yuv420p10le -> 10 bit");
+    Check(BitDepthFromPixFmt("yuv422p12le") == 12, "yuv422p12le -> 12 bit");
+    Check(BitDepthFromPixFmt("p010le") == 10,      "p010le -> 10 bit");
+    Check(BitDepthFromPixFmt("") == 0,             "empty pix_fmt -> unknown");
+
+    // HDR detection by transfer characteristic
+    {
+        VideoInfo h;
+        h.colorTransfer = "smpte2084";
+        Check(h.isHdr() && h.hdrLabel() == "HDR10", "PQ transfer -> HDR10");
+        h.colorTransfer = "arib-std-b67";
+        Check(h.isHdr() && h.hdrLabel() == "HLG", "HLG transfer -> HLG");
+        h.colorTransfer = "bt709";
+        Check(!h.isHdr() && h.hdrLabel() == "SDR", "bt709 transfer -> SDR");
+        h.pixFmt = "yuv420p10le";
+        h.bitsPerRawSample = 10;
+        Check(h.formatLabel() == "SDR · 10bit", "format label combines both",
+              Utf8ToWide(h.formatLabel()));
+    }
+
 // -----------------------------------------------------------------------
     // 5. black detection on the real file
     // -----------------------------------------------------------------------
@@ -701,9 +731,10 @@ int wmain(int argc, wchar_t** argv)
 
             std::vector<BlackRange> all, edges, shortAll;
 
-            // (a) window 0 -> whole file, all three black parts
+            // (a) -1 / -1 -> no limit on either side -> whole file, all three black parts
             BlackParams pFull;
-            pFull.edgeScanSec = 0.0;
+            pFull.headScanSec = -1.0;
+            pFull.tailScanSec = -1.0;
             Check(ff.DetectBlack(clip, ci.duration, pFull, all, nullptr,
                                  CancelToken(), err), "full scan", Utf8ToWide(err));
             ::wprintf(L"       whole file: %d range(s)\n", (int)all.size());
@@ -711,7 +742,8 @@ int wmain(int argc, wchar_t** argv)
 
             // (b) 10 s windows -> head and tail, but not the middle one
             BlackParams pEdge;
-            pEdge.edgeScanSec = 10.0;
+            pEdge.headScanSec = 10.0;
+            pEdge.tailScanSec = 10.0;
             Check(ff.DetectBlack(clip, ci.duration, pEdge, edges, nullptr,
                                  CancelToken(), err), "head/tail scan", Utf8ToWide(err));
             ::wprintf(L"       10s windows: %d range(s)\n", (int)edges.size());
@@ -726,6 +758,84 @@ int wmain(int argc, wchar_t** argv)
             Check(hasHead, "window scan finds the intro black");
             Check(hasTail, "window scan finds the outro black");
             Check(!hasMiddle, "window scan skips the middle (as designed)");
+
+            // (b2) head and tail are configured separately: a wide head window
+            //      reaches the middle black while a narrow tail window still
+            //      covers the outro - the two sides are truly independent
+            BlackParams pSplit;
+            pSplit.headScanSec = 40.0;
+            pSplit.tailScanSec = 2.0;
+            std::vector<BlackRange> split;
+            Check(ff.DetectBlack(clip, ci.duration, pSplit, split, nullptr,
+                                 CancelToken(), err), "split head/tail scan", Utf8ToWide(err));
+            bool splitMiddle = false, splitTail = false;
+            for (size_t i = 0; i < split.size(); ++i)
+            {
+                if (split[i].start > 25.0 && split[i].start < 40.0) splitMiddle = true;
+                if (split[i].end > ci.duration - 11.0) splitTail = true;
+            }
+            ::wprintf(L"       head 40s / tail 2s: %d range(s)\n", (int)split.size());
+            Check(splitMiddle, "wide head window reaches the middle black");
+            Check(splitTail, "narrow tail window still covers the outro");
+
+            // the mirror image: narrow head + wide tail must NOT reach the middle
+            BlackParams pSplit2;
+            pSplit2.headScanSec = 3.0;
+            pSplit2.tailScanSec = 20.0;
+            std::vector<BlackRange> split2;
+            Check(ff.DetectBlack(clip, ci.duration, pSplit2, split2, nullptr,
+                                 CancelToken(), err), "split head/tail scan (reversed)",
+                  Utf8ToWide(err));
+            bool split2Middle = false;
+            for (size_t i = 0; i < split2.size(); ++i)
+                if (split2[i].start > 25.0 && split2[i].start < 40.0) split2Middle = true;
+            ::wprintf(L"       head 3s / tail 20s: %d range(s)\n", (int)split2.size());
+            Check(!split2Middle, "narrow head window never reaches the middle black");
+
+            // (b3) 0 = that side is not scanned at all: head only
+            BlackParams pHeadOnly;
+            pHeadOnly.headScanSec = 3.0;
+            pHeadOnly.tailScanSec = 0.0;       // 0 = the tail is not scanned
+            std::vector<BlackRange> headOnly;
+            Check(ff.DetectBlack(clip, ci.duration, pHeadOnly, headOnly, nullptr,
+                                 CancelToken(), err), "head-only scan", Utf8ToWide(err));
+            ::wprintf(L"       head 3s / tail 0: %d range(s)\n", (int)headOnly.size());
+            bool headOnlyHasIntro = false, headOnlyReachedFar = false;
+            for (size_t i = 0; i < headOnly.size(); ++i)
+            {
+                if (headOnly[i].start < 1.0) headOnlyHasIntro = true;
+                if (headOnly[i].end > 10.0) headOnlyReachedFar = true;
+            }
+            Check(headOnlyHasIntro, "head-only scan finds the intro black");
+            Check(!headOnlyReachedFar, "tail = 0 means the outro is never scanned");
+
+            // (b4) the mirror image: head = 0 scans the tail side only
+            BlackParams pTailOnly;
+            pTailOnly.headScanSec = 0.0;
+            pTailOnly.tailScanSec = 20.0;
+            std::vector<BlackRange> tailOnly;
+            Check(ff.DetectBlack(clip, ci.duration, pTailOnly, tailOnly, nullptr,
+                                 CancelToken(), err), "tail-only scan", Utf8ToWide(err));
+            ::wprintf(L"       head 0 / tail 20s: %d range(s)\n", (int)tailOnly.size());
+            bool tailOnlyHasOutro = false, tailOnlyReachedStart = false;
+            for (size_t i = 0; i < tailOnly.size(); ++i)
+            {
+                if (tailOnly[i].end > ci.duration - 11.0) tailOnlyHasOutro = true;
+                if (tailOnly[i].start < 10.0) tailOnlyReachedStart = true;
+            }
+            Check(tailOnlyHasOutro, "tail-only scan finds the outro black");
+            Check(!tailOnlyReachedStart, "head = 0 means the intro is never scanned");
+
+            // (b5) both sides 0 -> there is nothing left to scan: fail loudly
+            // instead of silently reporting "0 black segments"
+            BlackParams pNone;
+            pNone.headScanSec = 0.0;
+            pNone.tailScanSec = 0.0;
+            std::vector<BlackRange> none;
+            std::string noneErr;
+            Check(!ff.DetectBlack(clip, ci.duration, pNone, none, nullptr,
+                                  CancelToken(), noneErr) && none.empty(),
+                  "head 0 + tail 0 is refused", Utf8ToWide(noneErr));
 
             // (c) every reported range must belong to the full scan
             bool subset = true;
@@ -745,9 +855,10 @@ int wmain(int argc, wchar_t** argv)
             }
             Check(subset, "window ranges are a subset of the full scan");
 
-            // (d) a clip shorter than 2x the window is scanned completely
+            // (d) a clip shorter than head+tail is scanned completely
             BlackParams pBig;
-            pBig.edgeScanSec = 1000.0;      // longer than the file
+            pBig.headScanSec = 1000.0;     // longer than the file
+            pBig.tailScanSec = 1000.0;
             Check(ff.DetectBlack(clip, ci.duration, pBig, shortAll, nullptr,
                                  CancelToken(), err), "short clip scan", Utf8ToWide(err));
             Check(shortAll.size() == all.size(),

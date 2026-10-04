@@ -301,6 +301,57 @@ std::wstring Ffmpeg::Version() const
     return Utf8ToWide(lines[0]);
 }
 
+// -----------------------------------------------------------------------
+// bit depth / HDR helpers
+// -----------------------------------------------------------------------
+namespace
+{
+    inline bool IsDigitC(char c) { return c >= '0' && c <= '9'; }
+}
+
+// HEVC/AV1 usually leave bits_per_raw_sample empty, so the pixel format name is
+// the reliable source: "yuv420p10le" -> 10, "p010le" -> 10, "yuv420p" -> 8.
+int BitDepthFromPixFmt(const std::string& pixFmt)
+{
+    if (pixFmt.empty()) return 0;
+    size_t p = pixFmt.find('p');
+    if (p == std::string::npos) return 0;
+    size_t i = p + 1;
+    while (i < pixFmt.size() && IsDigitC(pixFmt[i])) ++i;
+    if (i == p + 1) return 0;                       // "...p" -> plain 8 bit
+    int depth = atoi(pixFmt.substr(p + 1, i - p - 1).c_str());
+    if (depth < 8 || depth > 16) return 0;
+    return depth;
+}
+
+int VideoInfo::bitDepth() const
+{
+    if (bitsPerRawSample >= 8 && bitsPerRawSample <= 16) return bitsPerRawSample;
+    int d = BitDepthFromPixFmt(pixFmt);
+    return d > 0 ? d : 8;                           // 8 bit is the safe default
+}
+
+bool VideoInfo::isHdr() const
+{
+    return colorTransfer == "smpte2084" || colorTransfer == "arib-std-b67";
+}
+
+std::string VideoInfo::hdrLabel() const
+{
+    if (colorTransfer == "smpte2084") return "HDR10";
+    if (colorTransfer == "arib-std-b67") return "HLG";
+    return "SDR";
+}
+
+std::string VideoInfo::bitDepthLabel() const
+{
+    return std::to_string(bitDepth()) + "bit";
+}
+
+std::string VideoInfo::formatLabel() const
+{
+    return hdrLabel() + " · " + bitDepthLabel();
+}
 // ---------------------------------------------------------------------------
 // probe
 // ---------------------------------------------------------------------------
@@ -330,7 +381,8 @@ bool Ffmpeg::Probe(const std::wstring& file, VideoInfo& info, std::string& err,
         a.push_back(L"-v");              a.push_back(L"error");
         a.push_back(L"-select_streams"); a.push_back(L"v:0");
         a.push_back(L"-show_entries");
-        a.push_back(L"stream=codec_name,width,height,r_frame_rate,avg_frame_rate,nb_frames,duration");
+        a.push_back(L"stream=codec_name,width,height,r_frame_rate,avg_frame_rate,nb_frames,duration,"
+                    L"pix_fmt,bits_per_raw_sample,color_transfer,color_primaries,color_space");
         a.push_back(L"-of");             a.push_back(L"default=noprint_wrappers=1");
         a.push_back(file);
 
@@ -367,6 +419,11 @@ bool Ffmpeg::Probe(const std::wstring& file, VideoInfo& info, std::string& err,
                 double f = ParseRational(v);
                 if (f > 0.0 && f < 1000.0) info.fps = f;
             }
+            else if (k == "pix_fmt")             info.pixFmt = v;
+            else if (k == "bits_per_raw_sample") info.bitsPerRawSample = atoi(v.c_str());
+            else if (k == "color_transfer")      info.colorTransfer = v;
+            else if (k == "color_primaries")     info.colorPrimaries = v;
+            else if (k == "color_space")         info.colorSpace = v;
         }
 
         if (info.width <= 0 || info.height <= 0)
@@ -537,8 +594,12 @@ bool Ffmpeg::ScanWindow(const std::wstring& file, double t0, double dur,
     return true;
 }
 
-// Long videos only decode the first and last `edgeScanSec` seconds,
-// because the intro / outro boundaries almost always sit in there.
+// Long videos only decode a slice of the file, because the intro / outro
+// boundaries almost always sit near its ends. Each side is configured on its own
+// (an intro is usually much shorter than the outro, or the other way round):
+//   > 0 = only that many seconds at the head / at the tail
+//   = 0 = that side is not scanned at all (head 180 / tail 0 = first 180 s only)
+//   < 0 = no limit on that side -> the whole file is scanned
 bool Ffmpeg::DetectBlack(const std::wstring& file, double duration,
                          const BlackParams& p,
                          std::vector<BlackRange>& out,
@@ -554,18 +615,27 @@ bool Ffmpeg::DetectBlack(const std::wstring& file, double duration,
         return false;
     }
 
-    double win = p.edgeScanSec;
-    bool whole = (win <= 0.0 || duration <= 0.0 || duration <= win * 2.0);
+    const double head = p.headScanSec;
+    const double tail = p.tailScanSec;
 
     std::vector<std::pair<double, double> > windows;
-    if (whole)
+    if (duration <= 0.0 || head < 0.0 || tail < 0.0 || head + tail >= duration)
     {
+        // 时长未知、某一侧不限，或两个窗口加起来已经盖住整段 -> 一次整段扫完
         windows.push_back(std::make_pair(0.0, duration));
     }
     else
     {
-        windows.push_back(std::make_pair(0.0, win));
-        windows.push_back(std::make_pair(duration - win, win));
+        // 两个窗口都不会越过片尾，也不会互相重叠（上面已保证 head + tail < duration）
+        if (head > 0.0) windows.push_back(std::make_pair(0.0, head));
+        if (tail > 0.0) windows.push_back(std::make_pair(duration - tail, tail));
+    }
+
+    if (windows.empty())
+    {
+        // 两侧都是 0 = 没有任何可扫区域（设置界面已拦下，这里兜底）
+        err = "no scan window: head=0 and tail=0";
+        return false;
     }
 
     double total = 0.0;

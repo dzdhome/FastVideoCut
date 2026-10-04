@@ -103,6 +103,8 @@ struct VideoItem
     std::wstring summaryText() const;
     // 人类可读的保留区间，例如 "00:00:12.500 - 00:01:03.000"（未选择时为空）
     std::wstring keepRangeText() const;
+    // 画面规格（"HDR10 · 10bit"），未分析时为空；左侧面板单独占一行显示
+    std::wstring formatText() const;
     // 保留起点 / 终点（秒）。< 0 表示该端还没有指定。
     double keepStartTime() const;
     double keepEndTime() const;

@@ -55,6 +55,7 @@ static const COLORREF kClrBlackBrd  = RGB(235, 80, 80);
 static const COLORREF kClrDropBrd   = RGB(96, 100, 110);
 static const COLORREF kClrCurrent   = RGB(255, 200, 60);
 static const COLORREF kClrPlaceholder = RGB(44, 48, 56);
+static const COLORREF kClrHdr        = RGB(255, 168, 60);   // HDR 标识高亮色
 
 static void AlphaFillRect(HDC dc, const RECT& rc, COLORREF c, BYTE alpha)
 {
@@ -496,7 +497,8 @@ void TimelineView::UpdateVScrollBar()
 int TimelineView::RowHeight() const
 {
     int h = thumbH_ + 14;
-    if (h < 52) h = 52;
+    // 左侧面板有 4 行（标题 / 时长·分辨率·fps / 规格 / 已选段），最小高度要放得下
+    if (h < kMinRowH) h = kMinRowH;
     return h;
 }
 
@@ -981,24 +983,38 @@ void TimelineView::DrawRow(HDC dc, int index, const RECT& rc)
     ::DrawTextW(dc, it.summaryText().c_str(), -1, &l2,
                 DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
+    // 第 3 行：画面规格（HDR/SDR · 10bit），有 ffprobe 结果才显示
     RECT l3 = l2;
     l3.top = rc.top + 38;
     l3.bottom = rc.top + 54;
-    std::wstring line3;
+    std::wstring fmt = it.formatText();
+    if (!fmt.empty())
+    {
+        // HDR 用高亮色标出，SDR 用普通灰色
+        ::SetTextColor(dc, it.info.isHdr() ? kClrHdr : kClrTextDim);
+        ::DrawTextW(dc, fmt.c_str(), -1, &l3,
+                    DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+    }
+
+    // 第 4 行：选段统计 / 错误信息
+    RECT l4 = l3;
+    l4.top = rc.top + 54;
+    l4.bottom = rc.top + 70;
+    std::wstring line4;
     if (it.status == ItemStatus::Error)
     {
-        line3 = L"错误: " + it.message;
+        line4 = L"错误: " + it.message;
         ::SetTextColor(dc, kClrBlackBrd);
     }
     else
     {
-        line3 = FormatString(L"已选 %d/%d 段 · 保留 %s · %s",
+        line4 = FormatString(L"已选 %d/%d 段 · 保留 %s · %s",
                              it.selectedSegmentCount(), (int)it.segments.size(),
                              FormatClock(it.selectedDuration()).c_str(),
                              it.statusText().c_str());
         ::SetTextColor(dc, kClrTextDim);
     }
-    ::DrawTextW(dc, line3.c_str(), -1, &l3,
+    ::DrawTextW(dc, line4.c_str(), -1, &l4,
                 DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
     // ---- frame strip ------------------------------------------------------

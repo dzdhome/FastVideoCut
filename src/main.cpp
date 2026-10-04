@@ -95,7 +95,9 @@ namespace
                   L"  --black-min <sec>   blackdetect d=      (default 0.10)\n"
                   L"  --black-pix <val>   blackdetect pix_th= (default 0.10)\n"
                   L"  --black-pic <val>   blackdetect pic_th= (default 0.98)\n"
-        L"  --scan-window <sec> scan only the first/last N seconds (default 180, 0 = whole file)\n"
+        L"  --scan-window <sec> head+tail: scan N sec (default 180, <0 = no limit)\n"
+                  L"  --scan-head <sec>   only the first N sec (0 = skip head, <0 = no limit)\n"
+                  L"  --scan-tail <sec>   only the last N sec  (0 = skip tail, <0 = no limit)\n"
                   L"  --reencode          re-encode instead of lossless stream copy\n"
                   L"  --merge-all         export as one merged video (default: one per input)\n"
                   L"  --auto-detect       start black detection immediately\n"
@@ -135,6 +137,8 @@ static int RunApp(HINSTANCE hInst)
         else if (low == L"--black-pix")  args.blackPix = wcstod(NextArg(argc, argv, i).c_str(), nullptr);
         else if (low == L"--black-pic")  args.blackPic = wcstod(NextArg(argc, argv, i).c_str(), nullptr);
         else if (low == L"--scan-window") args.scanWindow = wcstod(NextArg(argc, argv, i).c_str(), nullptr);
+        else if (low == L"--scan-head")   args.scanHead = wcstod(NextArg(argc, argv, i).c_str(), nullptr);
+        else if (low == L"--scan-tail")   args.scanTail = wcstod(NextArg(argc, argv, i).c_str(), nullptr);
         else if (low == L"--reencode")   args.reencode = true;
         else if (low == L"--merge-all")  args.mergeAll = true;
         else if (low == L"--auto-detect") args.autoDetect = true;
@@ -190,6 +194,7 @@ static int RunApp(HINSTANCE hInst)
         { FVIRTKEY,            VK_F5,     IDM_VIEW_FIT },
         { FVIRTKEY,            VK_F6,     IDM_VID_DETECT },
         { FVIRTKEY | FSHIFT,   VK_F6,     IDM_VID_REDETECT },
+        { FVIRTKEY | FCONTROL, VK_F6,     IDM_VID_ANALYZE_ONE },
         { FVIRTKEY,            VK_F7,     IDM_EXP_EACH },
         { FVIRTKEY,            VK_F8,     IDM_EXP_MERGE },
         { FVIRTKEY,            VK_ESCAPE, IDM_EXP_CANCEL }

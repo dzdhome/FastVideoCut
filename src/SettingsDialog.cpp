@@ -75,10 +75,11 @@ namespace
     {
         SetText(dlg, IDC_SET_FFDIR, s.ffmpegDir);
         SetText(dlg, IDC_SET_OUTDIR, s.outputDir);
-            SetText(dlg, IDC_SET_MINDUR, NumberText(s.blackMinDuration, 2));
+        SetText(dlg, IDC_SET_MINDUR, NumberText(s.blackMinDuration, 2));
         SetText(dlg, IDC_SET_PIXTH, NumberText(s.blackPixTh, 2));
         SetText(dlg, IDC_SET_PICTH, NumberText(s.blackPicTh, 2));
-        SetText(dlg, IDC_SET_EDGESCAN, NumberText(s.blackEdgeScan, 0));
+        SetText(dlg, IDC_SET_HEADSCAN, NumberText(s.blackHeadScan, 0));
+        SetText(dlg, IDC_SET_TAILSCAN, NumberText(s.blackTailScan, 0));
         SetText(dlg, IDC_SET_THUMBH, FormatString(L"%d", s.thumbHeight));
         SetText(dlg, IDC_SET_CRF, FormatString(L"%d", s.crf));
         SetText(dlg, IDC_SET_PRESET, Utf8ToWide(s.preset));
@@ -136,8 +137,19 @@ namespace
                 s->blackMinDuration = GetDouble(dlg, IDC_SET_MINDUR, s->blackMinDuration);
                 s->blackPixTh       = GetDouble(dlg, IDC_SET_PIXTH, s->blackPixTh);
                 s->blackPicTh       = GetDouble(dlg, IDC_SET_PICTH, s->blackPicTh);
-                s->blackEdgeScan    = GetDouble(dlg, IDC_SET_EDGESCAN, s->blackEdgeScan);
-                if (s->blackEdgeScan < 0.0) s->blackEdgeScan = 0.0;
+                s->blackHeadScan    = GetDouble(dlg, IDC_SET_HEADSCAN, s->blackHeadScan);
+                s->blackTailScan    = GetDouble(dlg, IDC_SET_TAILSCAN, s->blackTailScan);
+                // 0 = 该侧完全不扫，负数 = 该侧不限制。两侧都是 0 就没有任何区域可扫，
+                // 与其默默扫出 0 段黑屏，不如直接拦下来告诉用户怎么填。
+                if (s->blackHeadScan == 0.0 && s->blackTailScan == 0.0)
+                {
+                    ::MessageBoxW(dlg,
+                        L"“只扫片头”和“只扫片尾”不能同时填 0，那样没有任何区域会被检测。\n\n"
+                        L"· 想只扫一侧：另一侧填 0（例如片头 180 / 片尾 0 = 只扫前 180 秒）\n"
+                        L"· 想整段检测：任意一侧填负数（例如 -1 = 该侧不限制）",
+                        L"FastVideoCut 设置", MB_ICONWARNING | MB_OK);
+                    return TRUE;
+                }
                 if (s->blackMinDuration < 0.0) s->blackMinDuration = 0.0;
                 if (s->blackPixTh < 0.0) s->blackPixTh = 0.0;
                 if (s->blackPicTh < 0.0) s->blackPicTh = 0.0;

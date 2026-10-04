@@ -58,7 +58,7 @@ namespace
         { IDB_REMOVE,     L"移除",       L"移除列表中选中的视频" },
         { IDB_UP,         L"上移",       L"把选中的视频在列表里上移" },
         { IDB_DOWN,       L"下移",       L"把选中的视频在列表里下移" },
-        { IDB_DETECT,     L"自动分析",   L"用 ffmpeg blackdetect 自动分析所有视频的黑屏位置 (F6)" },
+        { IDB_DETECT,     L"自动分析",   L"用 ffmpeg blackdetect 自动分析所有视频的黑屏位置 (F6)\n分析进行中点击可停止" },
         { IDB_EXPORT,     L"导出剪辑",   L"按选择导出：单文件裁剪或按顺序合并 (F7)" },
         { IDB_CLEARCACHE, L"清理缩略图", L"清除磁盘上的缩略图缓存（下次重新生成）" },
         { IDB_SETTINGS,   L"设置",       L"配置 ffmpeg 路径、黑屏检测参数与导出参数" },
@@ -146,7 +146,17 @@ bool MainWindow::Create(HINSTANCE hInst, const AppArgs& args)
     if (args_.blackMin > 0.0)     settings_.blackMinDuration = args_.blackMin;
     if (args_.blackPix > 0.0)     settings_.blackPixTh = args_.blackPix;
     if (args_.blackPic > 0.0)     settings_.blackPicTh = args_.blackPic;
-    if (args_.scanWindow >= 0.0)  settings_.blackEdgeScan = args_.scanWindow;
+    // --scan-window 一次设置两侧，--scan-head/--scan-tail 可再单独覆盖。
+    // 0 = 该侧完全不扫，负数 = 该侧不限制（整段）。兼容旧版：--scan-window 0
+    // 过去表示“整段扫描”，这里仍按整段处理，老脚本不会突然什么都不扫。
+    if (args_.scanWindow != kScanUnset)
+    {
+        double v = (args_.scanWindow == 0.0) ? -1.0 : args_.scanWindow;
+        settings_.blackHeadScan = v;
+        settings_.blackTailScan = v;
+    }
+    if (args_.scanHead != kScanUnset) settings_.blackHeadScan = args_.scanHead;
+    if (args_.scanTail != kScanUnset) settings_.blackTailScan = args_.scanTail;
     if (args_.reencode)           settings_.reencodeExport = true;
     if (!args_.output.empty())    settings_.outputDir = PathGetDirectory(PathGetFull(args_.output));
 
@@ -279,6 +289,7 @@ void MainWindow::CreateChildren()
         { L"状态",     96,  LVCFMT_LEFT   },
         { L"时长",     80,  LVCFMT_RIGHT  },
         { L"分辨率",   86,  LVCFMT_LEFT   },
+        { L"规格",     96,  LVCFMT_LEFT   },   // HDR/SDR + 位深
         { L"黑屏段",   60,  LVCFMT_RIGHT  },
         { L"黑屏时长", 80,  LVCFMT_RIGHT  },
         { L"起始时间", 104, LVCFMT_RIGHT  },
@@ -389,7 +400,9 @@ void MainWindow::BuildMenu()
     HMENU vid = ::CreatePopupMenu();
     ::AppendMenuW(vid, MF_STRING, IDM_VID_DETECT,     L"检测黑屏（跳过已检测）(&B)\tF6");
     ::AppendMenuW(vid, MF_STRING, IDM_VID_REDETECT,   L"重新检测全部黑屏(&R)\tShift+F6");
+    ::AppendMenuW(vid, MF_STRING, IDM_VID_ANALYZE_ONE, L"重新分析选中的视频(&N)\tCtrl+F6");
     ::AppendMenuW(vid, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(vid, MF_STRING, IDM_EXP_CANCEL,     L"停止当前分析(&C)\tEsc");
     ::AppendMenuW(vid, MF_STRING, IDM_VID_UP,         L"上移(&U)");
     ::AppendMenuW(vid, MF_STRING, IDM_VID_DOWN,       L"下移(&W)");
     ::AppendMenuW(vid, MF_STRING, IDM_VID_SORTNAME,   L"按文件名排序(&S)");
@@ -399,6 +412,7 @@ void MainWindow::BuildMenu()
     ::AppendMenuW(vid, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(vid, MF_STRING, IDM_VID_SETTINGS,   L"设置(&G)...");
     ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)vid, L"视频(&V)");
+    vidMenu_ = vid;
 
     HMENU sel = ::CreatePopupMenu();
     ::AppendMenuW(sel, MF_STRING, IDM_SEL_BODY,  L"保留主体（首末非黑屏段之间）(&B)\tCtrl+B");
@@ -642,18 +656,51 @@ LRESULT MainWindow::WndProc(UINT msg, WPARAM wp, LPARAM lp)
         NMHDR* nh = (NMHDR*)lp;
         if (nh && nh->idFrom == IDC_LIST && nh->code == NM_DBLCLK)
         {
-            if (ffmpeg_.available())
-            {
-                int sel = SelectedItem();
-                if (sel >= 0 && project_.items[sel].isAnalysed() == false)
-                    StartDetect();
-            }
+            // 双击 = 重新分析这一个视频（已分析过的也强制重跑）
+            StartDetectOne(SelectedItem());
             return 0;
         }
         if (nh && nh->idFrom == IDC_LIST && nh->code == LVN_KEYDOWN)
         {
             NMLVKEYDOWN* kd = (NMLVKEYDOWN*)lp;
             if (kd->wVKey == VK_DELETE) { OnCommand(IDM_FILE_REMOVE); return 0; }
+        }
+        if (nh && nh->idFrom == IDC_LIST && nh->code == NM_RCLICK)
+        {
+            // 右键：把右键所在的那一行设为选中，再弹出“重新分析该视频”菜单
+            NMITEMACTIVATE* act = (NMITEMACTIVATE*)lp;
+            if (act && act->iItem >= 0 && act->iItem < (int)project_.items.size())
+            {
+                int cur = SelectedItem();
+                if (cur != act->iItem)
+                {
+                    ::SendMessageW(list_, LVM_SETITEMSTATE, (WPARAM)-1, (LPARAM)nullptr);
+                    LVITEMW item;
+                    ::ZeroMemory(&item, sizeof(item));
+                    item.mask = LVIF_STATE;
+                    item.state = LVIS_SELECTED | LVIS_FOCUSED;
+                    item.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+                    ::SendMessageW(list_, LVM_SETITEMSTATE, (WPARAM)act->iItem, (LPARAM)&item);
+                    timeline_.SetCurrentItem(act->iItem);
+                }
+
+                HMENU m = ::CreatePopupMenu();
+                ::AppendMenuW(m, MF_STRING, IDM_VID_ANALYZE_ONE,
+                              L"重新分析这个视频(&N)");
+                ::AppendMenuW(m, MF_STRING, IDM_SEL_BODY,
+                              L"保留主体（首末非黑屏段之间）(&B)");
+                ::AppendMenuW(m, MF_STRING, IDM_SEL_ALL,
+                              L"整段保留（含黑屏）(&K)");
+                ::AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+                ::AppendMenuW(m, MF_STRING, IDM_FILE_REMOVE, L"移除(&R)");
+                POINT pt;
+                ::GetCursorPos(&pt);
+                int cmd = (int)::TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN,
+                                                pt.x, pt.y, 0, hwnd_, nullptr);
+                ::DestroyMenu(m);
+                if (cmd) OnCommand(cmd);
+            }
+            return 0;
         }
         break;
     }
@@ -799,23 +846,25 @@ void MainWindow::UpdateListRow(int index)
     if (!list_ || index < 0 || index >= (int)project_.items.size()) return;
     const VideoItem& it = project_.items[index];
 
-    std::wstring texts[11];
+    std::wstring texts[12];
     texts[0] = it.name;
     texts[1] = it.statusText();
     texts[2] = it.info.duration > 0.0 ? FormatClock(it.info.duration) : L"-";
     texts[3] = it.info.width > 0 ? FormatString(L"%dx%d", it.info.width, it.info.height) : L"-";
-    texts[4] = FormatString(L"%d", it.blackCount());
-    texts[5] = FormatClock(it.blackDuration());
+    // HDR/SDR + 位深（未分析时还没有 ffprobe 结果）
+    texts[4] = it.info.valid() ? Utf8ToWide(it.info.formatLabel()) : L"-";
+    texts[5] = FormatString(L"%d", it.blackCount());
+    texts[6] = FormatClock(it.blackDuration());
     // 选择起始时间 / 结束时间（还没有点选过时显示 “-”）
     double keepT0 = it.keepStartTime();
     double keepT1 = it.keepEndTime();
-    texts[6] = keepT0 >= 0.0 ? FormatTimecode(keepT0) : L"-";
-    texts[7] = keepT1 >= 0.0 ? FormatTimecode(keepT1) : L"-";
-    texts[8] = FormatClock(it.selectedDuration());
-    texts[9] = FormatString(L"%d/%d", it.selectedSegmentCount(), (int)it.segments.size());
-    texts[10] = it.info.sizeBytes > 0 ? FormatSize(it.info.sizeBytes) : L"-";
+    texts[7] = keepT0 >= 0.0 ? FormatTimecode(keepT0) : L"-";
+    texts[8] = keepT1 >= 0.0 ? FormatTimecode(keepT1) : L"-";
+    texts[9] = FormatClock(it.selectedDuration());
+    texts[10] = FormatString(L"%d/%d", it.selectedSegmentCount(), (int)it.segments.size());
+    texts[11] = it.info.sizeBytes > 0 ? FormatSize(it.info.sizeBytes) : L"-";
 
-    for (int i = 0; i < 11; ++i)
+    for (int i = 0; i < 12; ++i)
     {
         LVITEMW item;
         ::ZeroMemory(&item, sizeof(item));
@@ -848,8 +897,9 @@ void MainWindow::UpdateTitles()
 
     ::SetWindowTextW(help_,
         L"左键分段 = 保留起点，右键分段 = 保留终点（两者之间全部保留）| Ctrl+左键 = 单段保留/取消 | "
-        L"双击 = 只保留该段 | 点击任一分段都会在右侧预览播放 | 滚轮 = 上下滚动视频 | "
-        L"Ctrl+滚轮 = 缩放，Shift+滚轮 = 横向平移，中键拖动 = 平移 | 工具栏“列表” = 文件列表/视频列表切换");
+        L"双击 = 只保留该段 | 列表双击/右键 = 重新分析这个视频 | 点击任一分段都会在右侧预览播放 | "
+        L"滚轮 = 上下滚动视频 | Ctrl+滚轮 = 缩放，Shift+滚轮 = 横向平移，中键拖动 = 平移 | "
+        L"工具栏“列表” = 文件列表/视频列表切换");
 }
 
 void MainWindow::UpdateButtonStates()
@@ -859,17 +909,32 @@ void MainWindow::UpdateButtonStates()
     bool hasSel   = project_.SelectedSegmentCount() > 0;
     bool hasFf    = ffmpeg_.available();
     int  sel      = SelectedItem();
+    bool detecting = busy && currentJob_ == JobDetect;
+
+    // 分析进行中：工具栏按钮变成“停止分析”并保持可点，随时可以中断
+    if (buttonCount_ >= 5 && buttons_[4])
+        ::SetWindowTextW(buttons_[4], detecting ? L"停止分析" : L"自动分析");
 
     ::EnableWindow(buttons_[0], !busy);
     ::EnableWindow(buttons_[1], !busy && hasItems);
     ::EnableWindow(buttons_[2], !busy && sel > 0);
     ::EnableWindow(buttons_[3], !busy && sel >= 0 && sel + 1 < (int)project_.items.size());
-    ::EnableWindow(buttons_[4], !busy && hasItems && hasFf);
+    ::EnableWindow(buttons_[4], detecting || (!busy && hasItems && hasFf));
     ::EnableWindow(buttons_[5], !busy && hasItems && hasFf && hasSel);
     ::EnableWindow(buttons_[6], !busy);
     ::EnableWindow(buttons_[7], !busy);
     ::EnableWindow(buttons_[8], TRUE);
     ::EnableWindow(buttons_[9], TRUE);      // 列表/视频 视图切换随时可用
+
+    if (vidMenu_)
+    {
+        // 单个重分析需要选中一行，且任务空闲、ffmpeg 可用
+        bool canOne = !busy && hasFf && sel >= 0;
+        ::EnableMenuItem(vidMenu_, IDM_VID_ANALYZE_ONE,
+                         MF_BYCOMMAND | (canOne ? MF_ENABLED : MF_GRAYED));
+        ::EnableMenuItem(vidMenu_, IDM_EXP_CANCEL,
+                         MF_BYCOMMAND | (busy ? MF_ENABLED : MF_GRAYED));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1217,11 +1282,22 @@ void MainWindow::OnCommand(int id)
 
     case IDB_DETECT:
     case IDM_VID_DETECT:
+        // 分析中再点一次 = 停止分析（按钮已变成“停止分析”）
+        if (jobRunning_ && currentJob_ == JobDetect)
+        {
+            CancelJob();
+            return;
+        }
         StartDetect(false);
         return;
 
     case IDM_VID_REDETECT:
+        if (jobRunning_) { CancelJob(); return; }
         StartDetect(true);
+        return;
+
+    case IDM_VID_ANALYZE_ONE:
+        StartDetectOne(SelectedItem());
         return;
 
     case IDB_LISTVIEW:
@@ -1345,22 +1421,38 @@ void MainWindow::OnCommand(int id)
 // ---------------------------------------------------------------------------
 // jobs
 // ---------------------------------------------------------------------------
-void MainWindow::StartJobInternal(int job, bool detectAll)
+void MainWindow::StartJobInternal(int job, bool detectAll, int onlyIndex)
 {
     if (jobRunning_) return;
     preview_.Stop();               // decoding is expensive - stop previewing first
     if (worker_.joinable()) worker_.join();
 
     currentJob_ = job;
+    detectOnlyIndex_ = onlyIndex;
     if (cancel_.ev) ::ResetEvent(cancel_.ev);
 
     if (job == JobDetect)
     {
-        std::vector<int> todo = Project::PendingDetect(project_, detectAll);
+        // 只重跑一个视频：forceAll 语义，todo 只有它自己
+        std::vector<int> todo;
+        if (onlyIndex >= 0)
+        {
+            if (onlyIndex >= (int)project_.items.size()) return;
+            todo.push_back(onlyIndex);
+        }
+        else
+        {
+            todo = Project::PendingDetect(project_, detectAll);
+        }
         int skipped = (int)project_.items.size() - (int)todo.size();
 
         SetBusy(true, L"正在检测黑屏…");
-        if (detectAll)
+        if (onlyIndex >= 0)
+            AppendLog(FormatString(L"开始重新分析单个视频：%s (d=%.2fs pix_th=%.2f pic_th=%.2f)",
+                                   project_.items[(size_t)onlyIndex].name.c_str(),
+                                   settings_.blackMinDuration, settings_.blackPixTh,
+                                   settings_.blackPicTh));
+        else if (detectAll)
             AppendLog(FormatString(L"开始检测黑屏：全部 %d 个视频 (d=%.2fs pix_th=%.2f pic_th=%.2f)",
                                    (int)project_.items.size(),
                                    settings_.blackMinDuration, settings_.blackPixTh, settings_.blackPicTh));
@@ -1387,7 +1479,7 @@ void MainWindow::StartJobInternal(int job, bool detectAll)
 
     timeline_.Refresh();
     UpdateButtonStates();
-    worker_ = std::thread(&MainWindow::JobThreadMain, this, job, detectAll);
+    worker_ = std::thread(&MainWindow::JobThreadMain, this, job, detectAll, onlyIndex);
 }
 
 void MainWindow::StartDetect(bool forceAll)
@@ -1423,6 +1515,26 @@ void MainWindow::StartDetect(bool forceAll)
 
     if (args_.autoExport) nextJob_ = args_.mergeAll ? JobMergeAll : JobCutEach;
     StartJobInternal(JobDetect, forceAll);
+}
+
+// 重新分析单个视频：只跑这一条，其它视频的检测结果保持不动。
+void MainWindow::StartDetectOne(int index)
+{
+    if (jobRunning_) return;
+    if (index < 0 || index >= (int)project_.items.size())
+    {
+        Notify(L"请先在列表里选中一个视频。", MB_ICONINFORMATION);
+        return;
+    }
+    if (!ffmpeg_.available())
+    {
+        Notify(L"没有找到 ffmpeg.exe / ffprobe.exe。\n\n"
+               L"请把 ffmpeg 的 bin 目录放到程序目录下，或在“设置”里指定路径。", MB_ICONWARNING);
+        return;
+    }
+
+    // 不打断“检测完自动导出”的批处理链
+    StartJobInternal(JobDetect, true, index);
 }
 
 void MainWindow::StartExport(int job)
@@ -1487,6 +1599,7 @@ void MainWindow::OnJobFinished(int job, bool ok, const std::wstring& summary)
     if (worker_.joinable()) worker_.join();
 
     jobRunning_ = false;
+    detectOnlyIndex_ = -1;
     UpdateButtonStates();
     ::SendMessageW(progress_, PBM_SETPOS, ok ? 100 : 0, 0);
 
@@ -1535,7 +1648,7 @@ void MainWindow::OnJobFinished(int job, bool ok, const std::wstring& summary)
     }
 }
 
-void MainWindow::JobThreadMain(int job, bool detectAll)
+void MainWindow::JobThreadMain(int job, bool detectAll, int onlyIndex)
 {
     bool ok = true;
     std::wstring summary;
@@ -1546,15 +1659,26 @@ void MainWindow::JobThreadMain(int job, bool detectAll)
         bp.minDuration  = settings_.blackMinDuration;
         bp.pixThreshold = settings_.blackPixTh;
         bp.picThreshold = settings_.blackPicTh;
-        bp.edgeScanSec  = settings_.blackEdgeScan;
+        bp.headScanSec  = settings_.blackHeadScan;
+        bp.tailScanSec  = settings_.blackTailScan;
 
-        // 默认只检测还没分析过的视频（已经检测过的直接跳过，保留原结果）
-        std::vector<int> todo = Project::PendingDetect(project_, detectAll);
+        // 默认只检测还没分析过的视频（已经检测过的直接跳过，保留原结果）；
+        // onlyIndex >= 0 时只重跑这一个。
+        std::vector<int> todo;
+        if (onlyIndex >= 0)
+        {
+            if (onlyIndex < (int)project_.items.size()) todo.push_back(onlyIndex);
+        }
+        else
+        {
+            todo = Project::PendingDetect(project_, detectAll);
+        }
         int all = (int)project_.items.size();
         int skipped = all - (int)todo.size();
         int total = (int)todo.size();
         int blackTotal = 0;
         int failed = 0;
+        double totalBlackDuration = 0.0;
 
         for (int idx = 0; idx < total; ++idx)
         {
@@ -1610,11 +1734,13 @@ void MainWindow::JobThreadMain(int job, bool detectAll)
             it.status = ItemStatus::Ready;
             it.detectProgress = 1.0;
             blackTotal += (int)blacks.size();
+            totalBlackDuration += it.blackDuration();
 
             PostUiMessage(hwnd_, UiItemUpdated, L"", i);
             PostUiMessage(hwnd_, UiLog,
-                          FormatString(L"%s：%s，黑屏 %d 段（合计 %s）",
+                          FormatString(L"%s：%s，%s，黑屏 %d 段（合计 %s）",
                                        it.name.c_str(), it.summaryText().c_str(),
+                                       Utf8ToWide(it.info.formatLabel()).c_str(),
                                        (int)blacks.size(),
                                        FormatClock(it.blackDuration()).c_str()));
             if (!blacks.empty())
@@ -1632,8 +1758,14 @@ void MainWindow::JobThreadMain(int job, bool detectAll)
             ok = (failed == 0);
 
         if (summary.empty())
-            summary = FormatString(L"检测结束：%d 个视频（跳过 %d 个已检测），黑屏共 %d 段（失败 %d 个）",
-                                   total, skipped, blackTotal, failed);
+        {
+            if (onlyIndex >= 0)
+                summary = FormatString(L"重新分析完成：黑屏 %d 段（%s）",
+                                       blackTotal, FormatClock(totalBlackDuration).c_str());
+            else
+                summary = FormatString(L"检测结束：%d 个视频（跳过 %d 个已检测），黑屏共 %d 段（失败 %d 个）",
+                                       total, skipped, blackTotal, failed);
+        }
     }
     else if (job == JobOpenOnly)
     {
@@ -2012,8 +2144,15 @@ void MainWindow::ShowInfoDialog()
         L"   起止时间与长度，显示在“时长/黑屏段/黑屏时长”列，并直接画在帧流上\n"
         L"   （红色斜纹 = 黑屏段）。黑屏只是帮你快速找到“片头片尾”与“主体”的\n"
         L"   分界线，它本身并不是要删掉的内容。\n"
+        L"   左侧每行还会显示画面规格，例如“HDR10 · 10bit”或“SDR · 8bit”。\n"
         L"   · 默认只检测还没检测过的视频，新增/移除文件后再点不会全部重算\n"
+        L"   · 分析进行中“自动分析”会变成“停止分析”，再点一次即可中断（Esc 也可以）\n"
+        L"   · 只想重跑一个视频：选中该行后按 Ctrl+F6、点右键菜单“重新分析这个视频”，\n"
+        L"     或者直接双击该行；其它视频的结果不受影响\n"
         L"   · 需要重算全部时用 Shift+F6 或菜单“视频 → 重新检测全部黑屏”\n\n"
+        L"   扫描范围：长视频默认只解码片头 180 秒与片尾 180 秒（片头结束/片尾开始基本\n"
+        L"   都在这里），两项在“设置”里可以分别修改。填 0 = 该侧完全不扫，填负数 =\n"
+        L"   该侧不限制（整段扫描）；视频短于 片头+片尾 时自动整段扫描。\n\n"
         L"3) 决定保留哪些片段（帧流上点击即可，左键 = 起点，右键 = 终点）：\n"
         L"      · 左键点击分段 = 指定保留起点（标“起”）\n"
         L"      · 右键点击分段 = 指定保留终点（标“止”）\n"

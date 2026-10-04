@@ -1441,13 +1441,13 @@ void MainWindow::OnCommand(int id)
 
     case IDM_HELP_ABOUT:
         ::MessageBoxW(hwnd_,
-                      TR(L"FastVideoCut 1.0\n\n"
+                      TR(L"FastVideoCut 1.2.0\n\n"
                          L"用 ffmpeg 做后端的黑屏自动剪辑工具：\n"
                          L"  · 黑屏检测 blackdetect\n"
                          L"  · 帧流缩略图 tile 快速展开\n"
                          L"  · 无损剪切 -c copy + concat 合并\n\n"
                          L"界面: Win32 / C++ (VC++)    后端: ffmpeg.exe",
-                         L"FastVideoCut 1.0\n\n"
+                         L"FastVideoCut 1.2.0\n\n"
                          L"Black frame auto cutter built on ffmpeg:\n"
                          L"  - black frame detection (blackdetect)\n"
                          L"  - timeline thumbnails via tile mosaics\n"

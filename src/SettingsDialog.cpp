@@ -21,6 +21,7 @@
 // SettingsDialog.cpp - modal settings dialog built from an in-memory template
 // ---------------------------------------------------------------------------
 #include "SettingsDialog.h"
+#include "Loc.h"
 #include "resource.h"
 
 #include <shlobj.h>
@@ -71,8 +72,73 @@ namespace
         return ok ? std::wstring(path) : std::wstring();
     }
 
+    // 所有可见文字都在这里按当前界面语言重写一遍。对话框模板里写死的是中文，
+    // 切到英文时靠这些 SetDlgItemText 覆盖过去（所以模板里的 LTEXT 必须有 ID）。
+    void ApplyTexts(HWND dlg)
+    {
+        // 标题栏来自资源模板里的 CAPTION，这里按语言改写
+        ::SetWindowTextW(dlg, TR(L"FastVideoCut 设置", L"FastVideoCut Settings"));
+
+        SetText(dlg, IDC_SET_LB_FFDIR,    TR(L"ffmpeg 目录", L"ffmpeg folder"));
+        SetText(dlg, IDC_SET_LB_OUTDIR,   TR(L"输出目录", L"Output folder"));
+        SetText(dlg, IDC_SET_LB_UI,       TR(L"---- 界面 ----", L"---- Interface ----"));
+        SetText(dlg, IDC_SET_LB_LANG,     TR(L"界面语言", L"Language"));
+        SetText(dlg, IDC_SET_LB_DETECT,   TR(L"---- 黑屏检测 blackdetect ----",
+                                             L"---- Black detect (blackdetect) ----"));
+        SetText(dlg, IDC_SET_LB_MINDUR,   TR(L"最短时长(秒)", L"Min length (s)"));
+        SetText(dlg, IDC_SET_LB_PIXTH,    TR(L"像素阈值 pix_th", L"Pixel threshold pix_th"));
+        SetText(dlg, IDC_SET_LB_PICTH,    TR(L"比例阈值 pic_th", L"Picture threshold pic_th"));
+        SetText(dlg, IDC_SET_LB_THUMBH,   TR(L"缩略图高(像素)", L"Thumbnail height (px)"));
+        SetText(dlg, IDC_SET_LB_HEADSCAN, TR(L"只扫片头(秒)", L"Head scan (s)"));
+        SetText(dlg, IDC_SET_LB_TAILSCAN, TR(L"只扫片尾(秒)", L"Tail scan (s)"));
+        SetText(dlg, IDC_SET_LB_SCANHINT,
+                TR(L"0 = 该侧完全不扫，负数 = 该侧不限制（整段扫描）",
+                   L"0 = do not scan that side, negative = no limit (whole file)"));
+        SetText(dlg, IDC_SET_LB_EXPORT,   TR(L"---- 导出参数 ----", L"---- Export ----"));
+        SetText(dlg, IDC_SET_LB_CRF,      L"CRF");
+        SetText(dlg, IDC_SET_LB_PRESET,   L"preset");
+
+        SetText(dlg, IDC_SET_FFBROWSE,  TR(L"浏览...", L"Browse..."));
+        SetText(dlg, IDC_SET_OUTBROWSE, TR(L"浏览...", L"Browse..."));
+        SetText(dlg, IDC_SET_RESET,     TR(L"恢复默认", L"Defaults"));
+        SetText(dlg, IDOK,              TR(L"确定", L"OK"));
+        SetText(dlg, IDCANCEL,          TR(L"取消", L"Cancel"));
+
+        SetText(dlg, IDC_SET_THUMBS,
+                TR(L"生成视频流缩略图（不勾选时只检测黑屏，不抽帧，更快）",
+                   L"Build timeline thumbnails (off = black detection only, faster)"));
+        SetText(dlg, IDC_SET_REENC,
+                TR(L"导出时重新编码（默认关闭 = ffmpeg 无损流复制）",
+                   L"Re-encode on export (off = lossless stream copy)"));
+        SetText(dlg, IDC_SET_FASTSTART,
+                TR(L"mp4 输出加 +faststart（网络快启，略微增加耗时）",
+                   L"Add +faststart to mp4 (faster start, slightly slower)"));
+        SetText(dlg, IDC_SET_CONFIRM,
+                TR(L"导出完成后询问是否打开输出文件夹",
+                   L"Ask to open the output folder when finished"));
+    }
+
+    void SelectLang(HWND dlg, AppLang lang)
+    {
+        HWND cb = ::GetDlgItem(dlg, IDC_SET_LANG);
+        if (!cb) return;
+        // CBS_DROPDOWNLIST 上 SetWindowText 不会改当前项，必须用 CB_SETCURSEL
+        int sel = (lang == AppLang::Chinese) ? 1
+                : (lang == AppLang::English) ? 2 : 0;
+        ::SendMessageW(cb, CB_SETCURSEL, (WPARAM)sel, 0);
+    }
+
     void FillControls(HWND dlg, const AppSettings& s)
     {
+        ApplyTexts(dlg);
+        // 语言下拉框：三项顺序与 AppLang 的取值一致（0 跟随系统 / 1 简中 / 2 英文）
+        if (HWND cb = ::GetDlgItem(dlg, IDC_SET_LANG))
+        {
+            ::SendMessageW(cb, CB_RESETCONTENT, 0, 0);
+            for (int i = 0; i <= 2; ++i)
+                ::SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)Loc::LangName((AppLang)i));
+            SelectLang(dlg, s.lang);
+        }
         SetText(dlg, IDC_SET_FFDIR, s.ffmpegDir);
         SetText(dlg, IDC_SET_OUTDIR, s.outputDir);
         SetText(dlg, IDC_SET_MINDUR, NumberText(s.blackMinDuration, 2));
@@ -80,6 +146,7 @@ namespace
         SetText(dlg, IDC_SET_PICTH, NumberText(s.blackPicTh, 2));
         SetText(dlg, IDC_SET_HEADSCAN, NumberText(s.blackHeadScan, 0));
         SetText(dlg, IDC_SET_TAILSCAN, NumberText(s.blackTailScan, 0));
+        ::CheckDlgButton(dlg, IDC_SET_THUMBS, s.makeThumbs ? BST_CHECKED : BST_UNCHECKED);
         SetText(dlg, IDC_SET_THUMBH, FormatString(L"%d", s.thumbHeight));
         SetText(dlg, IDC_SET_CRF, FormatString(L"%d", s.crf));
         SetText(dlg, IDC_SET_PRESET, Utf8ToWide(s.preset));
@@ -105,13 +172,14 @@ namespace
             {
             case IDC_SET_FFBROWSE:
             {
-                std::wstring d = PickFolder(dlg, L"选择 ffmpeg 的 bin 目录（包含 ffmpeg.exe / ffprobe.exe）");
+                std::wstring d = PickFolder(dlg, TR(L"选择 ffmpeg 的 bin 目录（包含 ffmpeg.exe / ffprobe.exe）",
+                                                    L"Pick the ffmpeg bin folder (ffmpeg.exe / ffprobe.exe)"));
                 if (!d.empty()) SetText(dlg, IDC_SET_FFDIR, d);
                 return TRUE;
             }
             case IDC_SET_OUTBROWSE:
             {
-                std::wstring d = PickFolder(dlg, L"选择导出目录");
+                std::wstring d = PickFolder(dlg, TR(L"选择导出目录", L"Pick the output folder"));
                 if (!d.empty()) SetText(dlg, IDC_SET_OUTDIR, d);
                 return TRUE;
             }
@@ -144,10 +212,16 @@ namespace
                 if (s->blackHeadScan == 0.0 && s->blackTailScan == 0.0)
                 {
                     ::MessageBoxW(dlg,
-                        L"“只扫片头”和“只扫片尾”不能同时填 0，那样没有任何区域会被检测。\n\n"
-                        L"· 想只扫一侧：另一侧填 0（例如片头 180 / 片尾 0 = 只扫前 180 秒）\n"
-                        L"· 想整段检测：任意一侧填负数（例如 -1 = 该侧不限制）",
-                        L"FastVideoCut 设置", MB_ICONWARNING | MB_OK);
+                        TR(L"“只扫片头”和“只扫片尾”不能同时填 0，那样没有任何区域会被检测。\n\n"
+                           L"· 想只扫一侧：另一侧填 0（例如片头 180 / 片尾 0 = 只扫前 180 秒）\n"
+                           L"· 想整段检测：任意一侧填负数（例如 -1 = 该侧不限制）",
+                           L"Head and tail cannot both be 0 - nothing would be scanned.\n\n"
+                           L"- Scan one side only: set the other one to 0\n"
+                           L"  (head 180 / tail 0 = first 180 seconds only)\n"
+                           L"- Scan the whole file: set either one to a negative number\n"
+                           L"  (e.g. -1 = no limit on that side)"),
+                        TR(L"FastVideoCut 设置", L"FastVideoCut Settings"),
+                        MB_ICONWARNING | MB_OK);
                     return TRUE;
                 }
                 if (s->blackMinDuration < 0.0) s->blackMinDuration = 0.0;
@@ -166,6 +240,15 @@ namespace
                 s->reencodeExport      = ::IsDlgButtonChecked(dlg, IDC_SET_REENC) == BST_CHECKED;
                 s->faststart           = ::IsDlgButtonChecked(dlg, IDC_SET_FASTSTART) == BST_CHECKED;
                 s->confirmBeforeExport = ::IsDlgButtonChecked(dlg, IDC_SET_CONFIRM) == BST_CHECKED;
+                s->makeThumbs          = ::IsDlgButtonChecked(dlg, IDC_SET_THUMBS) == BST_CHECKED;
+
+                // 语言：下拉框里的 3 项顺序与 AppLang 的取值一致
+                HWND cb = ::GetDlgItem(dlg, IDC_SET_LANG);
+                if (cb)
+                {
+                    int sel = (int)::SendMessageW(cb, CB_GETCURSEL, 0, 0);
+                    if (sel >= 0 && sel <= 2) s->lang = (AppLang)sel;
+                }
 
                 ::EndDialog(dlg, IDOK);
                 return TRUE;

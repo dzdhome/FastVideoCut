@@ -95,7 +95,9 @@ public:
     HWND hwnd() const { return hwnd_; }
 
     void Attach(Project* project, Ffmpeg* ffmpeg, AppSettings* settings);
-    void EnableThumbs(bool on) { thumbsEnabled_ = on; }
+    // 生成缩略图开关（设置里的“生成视频流缩略图”）。关闭时不再向 worker
+    // 提交抽帧任务，帧流里只画黑屏/分段标记。
+    void SetThumbsEnabled(bool on);
     void Refresh();
     // Called by the main window after it has moved/resized the strip: as long as
     // the user has not zoomed or scrolled manually, keep the whole timeline fitted.

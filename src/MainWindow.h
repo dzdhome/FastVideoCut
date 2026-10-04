@@ -52,6 +52,32 @@ enum FcJob
 // 所以不能用 -1 表示“没给”。
 constexpr double kScanUnset = -1e9;
 
+// 工具栏按钮的文字与提示（按当前语言即时重建，见 ToolbarButtons）
+struct BtnDef
+{
+    int            id;
+    const wchar_t* text;
+    const wchar_t* tip;
+};
+
+// 工具栏按钮的固定下标。buttons_ 是一个按这个顺序填的数组，
+// 到处写 buttons_[4] 这种魔法数字太容易出错（加一个按钮就全错位）。
+enum ToolBtn
+{
+    TB_Add       = 0,
+    TB_Remove    = 1,
+    TB_Clear     = 2,   // 清空列表
+    TB_Up        = 3,
+    TB_Down      = 4,
+    TB_Detect    = 5,
+    TB_Export    = 6,
+    TB_ClearCache= 7,
+    TB_Settings  = 8,
+    TB_Info      = 9,
+    TB_List      = 10,
+    TB_Count     = 11
+};
+
 struct AppArgs
 {
     std::wstring              ffmpegDir;
@@ -91,6 +117,8 @@ private:
     void BuildMenu();
     void CreateChildren();
     void LayoutChildren();
+    // 界面语言切换后重建所有静态文字（菜单、按钮、列表头、状态栏…）
+    void ApplyLanguage();
     void OnCommand(int id);
     void OnAddFiles(std::vector<std::wstring>* files);
     void OnDropAdd(HDROP drop);
@@ -148,8 +176,10 @@ private:
     HWND         help_      = nullptr;
     HWND         progress_   = nullptr;
     HWND         tooltip_    = nullptr;
-    HWND         buttons_[12];
+    HWND         buttons_[TB_Count];
     int          buttonCount_ = 0;
+    // 工具栏按钮的文字/提示，按当前语言即时重建（切换语言时刷新）
+    BtnDef       btnDefs_[TB_Count];
     // true = 左侧显示文件列表；false = 文件列表框隐藏，只显示视频列表（帧流）
     bool         showList_  = false;
 

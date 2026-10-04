@@ -179,7 +179,9 @@ static int RunApp(HINSTANCE hInst)
     MainWindow wnd;
     if (!wnd.Create(hInst, args))
     {
-        ::MessageBoxW(nullptr, L"无法创建主窗口。", L"FastVideoCut", MB_ICONERROR);
+        ::MessageBoxW(nullptr,
+                          TR(L"无法创建主窗口。", L"Cannot create the main window."),
+                          L"FastVideoCut", MB_ICONERROR);
         ::OleUninitialize();
         return 1;
     }

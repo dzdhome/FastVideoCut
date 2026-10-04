@@ -93,7 +93,7 @@ Invoke-Tool $gxx ($cxxflags + $static + $ldflags + @('-municode', '-o', $gui) + 
 $st = Join-Path $outDir 'SelfTest.exe'
 Write-Host ("  build    {0}" -f $st)
 $stSrc = @((Join-Path $root 'tests\SelfTest.cpp'))
-foreach ($n in 'Utf', 'Process', 'Ffmpeg', 'Project') {
+foreach ($n in 'Utf', 'Process', 'Ffmpeg', 'Project', 'Loc') {
     $stSrc += (Join-Path $root ("src\$n.cpp"))
 }
 # SelfTest stays at -O2 with exceptions: no GUI, so strip/LTO buys nothing

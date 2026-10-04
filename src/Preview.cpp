@@ -23,6 +23,7 @@
 #include "Preview.h"
 
 #include "Utf.h"
+#include "Loc.h"
 
 #include <windowsx.h>
 #include <mmsystem.h>
@@ -134,11 +135,11 @@ namespace
     {
         switch (state)
         {
-        case 1:  return L"播放中";
-        case 2:  return L"已暂停";
-        case 3:  return L"已结束";
-        case 4:  return L"失败";
-        default: return L"就绪";
+        case 1:  return TR(L"播放中", L"Playing");
+        case 2:  return TR(L"已暂停", L"Paused");
+        case 3:  return TR(L"已结束", L"Finished");
+        case 4:  return TR(L"失败", L"Failed");
+        default: return TR(L"就绪", L"Ready");
         }
     }
 }
@@ -146,6 +147,12 @@ namespace
 // ---------------------------------------------------------------------------
 // window creation / layout
 // ---------------------------------------------------------------------------
+void PreviewPane::SetLanguage()
+{
+    UpdateButtons();
+    if (pane_) ::InvalidateRect(pane_, nullptr, FALSE);
+}
+
 bool PreviewPane::Create(HWND owner, int id, HINSTANCE inst)
 {
     owner_ = owner;
@@ -174,11 +181,11 @@ bool PreviewPane::Create(HWND owner, int id, HINSTANCE inst)
                               0, 0, 10, 10, owner_, (HMENU)(INT_PTR)id, inst_, this);
     if (!pane_) return false;
 
-    btnPause_ = ::CreateWindowExW(0, L"BUTTON", L"暂停",
+    btnPause_ = ::CreateWindowExW(0, L"BUTTON", TR(L"暂停", L"Pause"),
                                   WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_PUSHBUTTON,
                                   0, 0, 10, 10, pane_, (HMENU)(INT_PTR)IDC_PV_PAUSE,
                                   inst_, nullptr);
-    btnStop_ = ::CreateWindowExW(0, L"BUTTON", L"停止",
+    btnStop_ = ::CreateWindowExW(0, L"BUTTON", TR(L"停止", L"Stop"),
                                  WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_PUSHBUTTON,
                                  0, 0, 10, 10, pane_, (HMENU)(INT_PTR)IDC_PV_STOP,
                                  inst_, nullptr);
@@ -244,11 +251,15 @@ void PreviewPane::UpdateButtons()
     bool on = (state_ == 1 || state_ == 2);
     if (btnPause_)
     {
-        ::SetWindowTextW(btnPause_, paused_ ? L"继续" : L"暂停");
+        ::SetWindowTextW(btnPause_, paused_ ? TR(L"继续", L"Resume") : TR(L"暂停", L"Pause"));
         ::EnableWindow(btnPause_, on ? TRUE : FALSE);
     }
     if (btnStop_)
+    {
+        // 停止按钮的文字同样要跟着界面语言走（SetLanguage 会走到这里）
+        ::SetWindowTextW(btnStop_, TR(L"停止", L"Stop"));
         ::EnableWindow(btnStop_, on ? TRUE : FALSE);
+    }
 }
 
 LRESULT CALLBACK PreviewPane::WndProcStatic(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -480,7 +491,7 @@ void PreviewPane::OnPaint()
 
     std::wstring text;
     if (state == 0 && label_.empty())
-        text = L"预览就绪";
+        text = TR(L"预览就绪", L"Preview ready");
     else
         text = label_ + L"   " + FormatTimecode(pos) + L" / " + FormatTimecode(t1_)
                + L"   " + StateSuffix(state);
@@ -502,7 +513,8 @@ void PreviewPane::OnPaint()
     {
         ::SetTextColor(dc, RGB(126, 134, 148));
         HGDIOBJ of = font_ ? ::SelectObject(dc, font_) : nullptr;
-        ::DrawTextW(dc, L"单击时间线上的分段开始预览播放", -1, &vid,
+        ::DrawTextW(dc, TR(L"单击时间线上的分段开始预览播放",
+                                L"Click a segment in the timeline to preview it"), -1, &vid,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         if (of) ::SelectObject(dc, of);
     }
@@ -551,8 +563,9 @@ void PreviewPane::Play(const std::wstring& file, double t0, double t1,
         state_ = 4;
         UpdateButtons();
         ::InvalidateRect(pane_, nullptr, FALSE);
-        LogLine(L"预览失败：" + (label_.empty() ? std::wstring(L"(无分段)") : label_) +
-                (ffmpeg_.empty() ? L"（未找到 ffmpeg）" : L"（时间区间无效）"));
+        LogLine(TR(L"预览失败：", L"Preview failed: ") + (label_.empty() ? std::wstring(TR(L"(无分段)", L"(no segment)")) : label_) +
+                (ffmpeg_.empty() ? TR(L"（未找到 ffmpeg）", L" (ffmpeg not found)")
+                                 : TR(L"（时间区间无效）", L" (invalid time range)")));
         return;
     }
 
@@ -583,7 +596,8 @@ void PreviewPane::Play(const std::wstring& file, double t0, double t1,
     UpdateButtons();
     ::InvalidateRect(pane_, nullptr, FALSE);
 
-    LogLine(FormatString(L"预览播放：%s  %s - %s  [%dx%d @ %.3gfps]",
+    LogLine(FormatString(TR(L"预览播放：%s  %s - %s  [%dx%d @ %.3gfps]",
+                         L"Preview: %s  %s - %s  [%dx%d @ %.3gfps]"),
                          label_.c_str(), FormatTimecode(t0_).c_str(),
                          FormatTimecode(t1_).c_str(), ow, oh, outFps));
 
@@ -663,7 +677,8 @@ void PreviewPane::VideoWorker(int outW, int outH, double outFps)
     {
         playing_ = false;
         state_ = 4;
-        LogLine(L"预览失败：" + label_ + L"（无法启动 ffmpeg）");
+        LogLine(TR(L"预览失败：", L"Preview failed: ") + label_ +
+                TR(L"（无法启动 ffmpeg）", L" (cannot start ffmpeg)"));
         if (pane_) ::PostMessageW(pane_, WM_PV_REFRESH, 0, 0);
         return;
     }
@@ -757,13 +772,14 @@ void PreviewPane::VideoWorker(int outW, int outH, double outFps)
     if (exitCode == 0)
     {
         state_ = 3;
-        LogLine(FormatString(L"预览结束：%s（%lld 帧）", label_.c_str(), (long long)frames_));
+        LogLine(FormatString(TR(L"预览结束：%s（%lld 帧）", L"Preview ended: %s (%lld frames)"),
+                         label_.c_str(), (long long)frames_));
     }
     else
     {
         state_ = 4;
         std::wstring detail = ReadErrorFile(errFile_);
-        LogLine(FormatString(L"预览失败：%s（ffmpeg 退出码 %u）", label_.c_str(),
+        LogLine(FormatString(TR(L"预览失败：%s（ffmpeg 退出码 %u）", L"Preview failed: %s (ffmpeg exit %u)"), label_.c_str(),
                              (unsigned)exitCode) +
                 (detail.empty() ? std::wstring() : L"：" + detail));
     }
@@ -924,8 +940,9 @@ void PreviewPane::StopWorkers(bool notify)
         state_ = 0;
         UpdateButtons();
         ::InvalidateRect(pane_, nullptr, FALSE);
-        LogLine(FormatString(L"预览停止：%s（已播 %lld 帧）",
-                             label_.c_str(), (long long)frames_));
+        LogLine(FormatString(TR(L"预览停止：%s（已播 %lld 帧）",
+                             L"Preview stopped: %s (%lld frames played)"),
+                         label_.c_str(), (long long)frames_));
     }
 }
 

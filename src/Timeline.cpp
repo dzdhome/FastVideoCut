@@ -22,6 +22,7 @@
 // ---------------------------------------------------------------------------
 #include "Timeline.h"
 #include "Messages.h"
+#include "Loc.h"
 
 #include <windowsx.h>
 #include <shellapi.h>
@@ -227,11 +228,26 @@ bool TimelineView::Create(HWND parent, int id, HINSTANCE hInst)
 
     cacheDir_ = ThumbCacheDir();
 
-    if (thumbsEnabled_)
-        worker_ = std::thread(&TimelineView::WorkerMain, this);
-    else
-        pendingFit_ = true;
+    // worker 永远启动：它 cv_.wait 阻塞在空队列上，不消耗 CPU。之所以不按
+    // thumbsEnabled_ 决定，是为了让运行中改设置能立刻生效（否则先关后开
+    // 就再也没有线程去抽帧了）。
+    worker_ = std::thread(&TimelineView::WorkerMain, this);
     return true;
+}
+
+void TimelineView::SetThumbsEnabled(bool on)
+{
+    if (on == thumbsEnabled_) return;
+    thumbsEnabled_ = on;
+    if (!on)
+    {
+        // 关掉时把已经解码到内存里的位图释放掉（否则会一直占着几百 MB）
+        ClearThumbs();
+        std::lock_guard<std::mutex> lk(mtx_);
+        queue_.clear();
+        pendingKeys_.clear();
+    }
+    Refresh();
 }
 
 void TimelineView::Shutdown()
@@ -856,9 +872,12 @@ void TimelineView::DrawEmptyState(HDC dc, const RECT& rc)
     ::SetBkMode(dc, TRANSPARENT);
     ::SetTextColor(dc, kClrTextDim);
 
-    const wchar_t* line1 = L"把视频文件拖到这里，或点击左上角“添加视频”";
-    const wchar_t* line2 = L"支持 mp4 / mkv / mov / avi / flv / ts / wmv ...";
-    const wchar_t* line3 = L"自动分析后可点击帧流上的分段进行选择（选中=保留）";
+    const wchar_t* line1 = TR(L"把视频文件拖到这里，或点击左上角“添加视频”",
+                               L"Drop video files here, or click \"Add videos\" at the top left");
+    const wchar_t* line2 = TR(L"支持 mp4 / mkv / mov / avi / flv / ts / wmv ...",
+                               L"Supported: mp4 / mkv / mov / avi / flv / ts / wmv ...");
+    const wchar_t* line3 = TR(L"自动分析后可点击帧流上的分段进行选择（选中=保留）",
+                               L"After analysing, click a segment in the strip to keep it");
 
     RECT r = rc;
     r.top = rc.top + (rc.bottom - rc.top) / 2 - 46;
@@ -890,7 +909,8 @@ void TimelineView::DrawLeftPanel(HDC dc, const RECT& rc)
     RECT tr = h;
     tr.left += 10;
     tr.top += 3;
-    ::DrawTextW(dc, L"视频 / 时长 / 黑屏", -1, &tr, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+    ::DrawTextW(dc, TR(L"视频 / 时长 / 黑屏", L"Video / length / black"),
+             -1, &tr, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
     ::SelectObject(dc, oldFont);
 
     RECT b = p;
@@ -1003,12 +1023,13 @@ void TimelineView::DrawRow(HDC dc, int index, const RECT& rc)
     std::wstring line4;
     if (it.status == ItemStatus::Error)
     {
-        line4 = L"错误: " + it.message;
+        line4 = TR(L"错误: ", L"Error: ") + it.message;
         ::SetTextColor(dc, kClrBlackBrd);
     }
     else
     {
-        line4 = FormatString(L"已选 %d/%d 段 · 保留 %s · %s",
+        line4 = FormatString(TR(L"已选 %d/%d 段 · 保留 %s · %s",
+                                L"kept %d/%d - %s - %s"),
                              it.selectedSegmentCount(), (int)it.segments.size(),
                              FormatClock(it.selectedDuration()).c_str(),
                              it.statusText().c_str());
@@ -1036,8 +1057,8 @@ void TimelineView::DrawRow(HDC dc, int index, const RECT& rc)
             ::SetBkMode(dc, TRANSPARENT);
             RECT txt = ph;
             const wchar_t* msg = (it.status == ItemStatus::Error)
-                                     ? L"读取失败"
-                                     : L"待自动分析";
+                                     ? TR(L"读取失败", L"Probe failed")
+                                     : TR(L"待自动分析", L"Not analysed yet");
             ::DrawTextW(dc, msg, -1, &txt, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         }
         else
@@ -1133,7 +1154,7 @@ void TimelineView::DrawRowStrip(HDC dc, int index, const RECT& rc, const RECT& s
         ::SetTextColor(dc, kClrTextDim);
         ::SetBkMode(dc, TRANSPARENT);
         RECT txt = ph;
-        ::DrawTextW(dc, L"正在展开视频帧流…", -1, &txt,
+        ::DrawTextW(dc, TR(L"正在展开视频帧流…", L"Expanding frame strip..."), -1, &txt,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
@@ -1200,11 +1221,13 @@ void TimelineView::DrawSegments(HDC dc, int index, const RECT& rc, int x0, int x
             bool isStart = (index == it.keepStart);
             bool isEnd   = (index == it.keepEnd);
             std::wstring label;
-            if (s.kind == SegKind::Black) label = FormatString(L"黑屏 %.2fs", s.length());
-            else if (isStart && isEnd)      label = FormatString(L"起止 %.1fs", s.length());
-            else if (isStart)               label = FormatString(L"起 %.1fs", s.length());
-            else if (isEnd)                 label = FormatString(L"止 %.1fs", s.length());
-            else label = FormatString(L"%s %.1fs", s.selected ? L"保留" : L"丢弃", s.length());
+            if (s.kind == SegKind::Black) label = FormatString(TR(L"黑屏 %.2fs", L"black %.2fs"), s.length());
+            else if (isStart && isEnd)      label = FormatString(TR(L"起止 %.1fs", L"in+out %.1fs"), s.length());
+            else if (isStart)               label = FormatString(TR(L"起 %.1fs", L"in %.1fs"), s.length());
+            else if (isEnd)                 label = FormatString(TR(L"止 %.1fs", L"out %.1fs"), s.length());
+            else label = FormatString(L"%s %.1fs",
+                                      s.selected ? TR(L"保留", L"keep") : TR(L"丢弃", L"drop"),
+                                      s.length());
 
             RECT tr;
             tr.left = r.left + 4;

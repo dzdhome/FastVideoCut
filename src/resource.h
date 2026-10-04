@@ -78,6 +78,7 @@
 #define IDB_INFO               41108
 #define IDB_CLEARCACHE         41109
 #define IDB_LISTVIEW           41110   // 文件列表 / 视频列表 切换
+#define IDB_CLEARLIST          41111   // 清空列表
 
 // ---- settings dialog -----------------------------------------------------
 #define IDD_SETTINGS           42001
@@ -99,3 +100,23 @@
 #define IDC_SET_RESET          42025
 #define IDC_SET_HEADSCAN       42026   // 只扫片头多少秒（0 = 该侧不限制）
 #define IDC_SET_TAILSCAN       42027   // 只扫片尾多少秒（0 = 该侧不限制）
+#define IDC_SET_LANG           42028   // 界面语言
+#define IDC_SET_THUMBS         42029   // 生成视频流缩略图
+
+// 设置对话框里的静态标签。切换界面语言时要用 SetDlgItemText 改写文字，
+// 所以每个标签都得有 ID（原来都是 -1）。
+#define IDC_SET_LB_FFDIR       42030
+#define IDC_SET_LB_OUTDIR      42031
+#define IDC_SET_LB_UI          42032
+#define IDC_SET_LB_LANG        42033
+#define IDC_SET_LB_DETECT      42034
+#define IDC_SET_LB_MINDUR      42035
+#define IDC_SET_LB_PIXTH       42036
+#define IDC_SET_LB_PICTH       42037
+#define IDC_SET_LB_THUMBH      42038
+#define IDC_SET_LB_HEADSCAN    42039
+#define IDC_SET_LB_TAILSCAN    42040
+#define IDC_SET_LB_SCANHINT    42041
+#define IDC_SET_LB_EXPORT      42042
+#define IDC_SET_LB_CRF         42043
+#define IDC_SET_LB_PRESET      42044

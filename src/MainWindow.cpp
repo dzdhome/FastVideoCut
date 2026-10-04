@@ -22,6 +22,7 @@
 // ---------------------------------------------------------------------------
 #include "MainWindow.h"
 #include "SettingsDialog.h"
+#include "Loc.h"
 
 #include <windowsx.h>
 #include <shellapi.h>
@@ -41,32 +42,58 @@
 #endif
 
 #define FVC_CLASS_NAME  L"FastVideoCutMainWnd"
-#define FVC_WND_TITLE   L"FastVideoCut - 黑屏自动剪辑工具 (ffmpeg 无损剪切)"
 
 namespace
 {
-    struct BtnDef
+    // 顺序必须和 ToolBtn 枚举一致（LayoutChildren 里的 widths 数组也按它排）。
+    // 这里既不能做成全局数组（TR() 不是常量表达式，不能用于静态初始化），
+    // 也不能缓存成 static —— 界面语言会在运行中改，缓存会把旧语言留住。
+    // 只有建窗口和切换语言时各调一次，构造开销可以忽略。
+    const BtnDef* ToolbarButtons(BtnDef* storage)
     {
-        int            id;
-        const wchar_t* text;
-        const wchar_t* tip;
-    };
-
-    const BtnDef kButtons[] =
-    {
-        { IDB_ADD,        L"添加视频",   L"添加视频文件 (Ctrl+O)，也可以直接把文件拖到窗口" },
-        { IDB_REMOVE,     L"移除",       L"移除列表中选中的视频" },
-        { IDB_UP,         L"上移",       L"把选中的视频在列表里上移" },
-        { IDB_DOWN,       L"下移",       L"把选中的视频在列表里下移" },
-        { IDB_DETECT,     L"自动分析",   L"用 ffmpeg blackdetect 自动分析所有视频的黑屏位置 (F6)\n分析进行中点击可停止" },
-        { IDB_EXPORT,     L"导出剪辑",   L"按选择导出：单文件裁剪或按顺序合并 (F7)" },
-        { IDB_CLEARCACHE, L"清理缩略图", L"清除磁盘上的缩略图缓存（下次重新生成）" },
-        { IDB_SETTINGS,   L"设置",       L"配置 ffmpeg 路径、黑屏检测参数与导出参数" },
-        { IDB_INFO,       L"说明",       L"查看使用说明" },
-        { IDB_LISTVIEW,   L"列表",       L"左侧切换：文件列表 / 视频列表（帧流）\n文件列表框默认隐藏，点击切换 (Ctrl+L)" }
-    };
-
-    const int kButtonCount = (int)(sizeof(kButtons) / sizeof(kButtons[0]));
+        BtnDef* b = storage;
+        b[TB_Add] = { IDB_ADD,
+                      TR(L"添加视频", L"Add"),
+                      TR(L"添加视频文件 (Ctrl+O)，也可以直接把文件拖到窗口",
+                         L"Add video files (Ctrl+O), or drag them onto the window") };
+        b[TB_Remove] = { IDB_REMOVE,
+                         TR(L"移除", L"Remove"),
+                         TR(L"移除列表中选中的视频", L"Remove the selected video") };
+        b[TB_Clear] = { IDB_CLEARLIST,
+                        TR(L"清空列表", L"Clear"),
+                        TR(L"清空整个视频列表（不删除磁盘上的文件）",
+                           L"Clear the whole list (files on disk are kept)") };
+        b[TB_Up] = { IDB_UP,
+                     TR(L"上移", L"Up"),
+                     TR(L"把选中的视频在列表里上移", L"Move the selected video up") };
+        b[TB_Down] = { IDB_DOWN,
+                       TR(L"下移", L"Down"),
+                       TR(L"把选中的视频在列表里下移", L"Move the selected video down") };
+        b[TB_Detect] = { IDB_DETECT,
+                         TR(L"自动分析", L"Analyse"),
+                         TR(L"用 ffmpeg blackdetect 自动分析所有视频的黑屏位置 (F6)\n分析进行中点击可停止",
+                            L"Find black frames with ffmpeg blackdetect (F6)\nClick again while running to stop") };
+        b[TB_Export] = { IDB_EXPORT,
+                         TR(L"导出剪辑", L"Export"),
+                         TR(L"按选择导出：单文件裁剪或按顺序合并 (F7)",
+                            L"Export the selection: cut each file or merge (F7)") };
+        b[TB_ClearCache] = { IDB_CLEARCACHE,
+                             TR(L"清理缩略图", L"Clear thumbs"),
+                             TR(L"清除磁盘上的缩略图缓存（下次重新生成）",
+                                L"Delete the thumbnail cache on disk") };
+        b[TB_Settings] = { IDB_SETTINGS,
+                           TR(L"设置", L"Settings"),
+                           TR(L"配置界面语言、ffmpeg 路径、黑屏检测参数与导出参数",
+                              L"Language, ffmpeg path, black detect and export options") };
+        b[TB_Info] = { IDB_INFO,
+                       TR(L"说明", L"Help"),
+                       TR(L"查看使用说明", L"Show the usage guide") };
+        b[TB_List] = { IDB_LISTVIEW,
+                       TR(L"列表", L"List"),
+                       TR(L"左侧切换：文件列表 / 视频列表（帧流）\n文件列表框默认隐藏，点击切换 (Ctrl+L)",
+                          L"Left pane: file list / video strip\nThe file list is hidden by default (Ctrl+L)") };
+        return b;
+    }
 
     std::wstring SanitizeFileName(const std::wstring& name)
     {
@@ -123,7 +150,7 @@ namespace
                                 FormatTimecode(ranges[i].end).c_str());
         }
         if (ranges.size() > maxShow)
-            out += FormatString(L" …等共 %d 段", (int)ranges.size());
+            out += FormatString(TR(L" …等共 %d 段", L" ... %d in total"), (int)ranges.size());
         return out;
     }
 }   // namespace
@@ -140,6 +167,10 @@ bool MainWindow::Create(HINSTANCE hInst, const AppArgs& args)
 
     LoadSettings(settings_);
     if (settings_.outputDir.empty()) settings_.outputDir = DefaultOutputDir();
+
+    // 语言必须在建任何窗口之前定下来：控件文字、菜单、工具提示都在创建时取一次
+    // TR()。Auto = 首次启动按系统区域自动选中文或英文。
+    Loc::Apply(settings_.lang);
 
     if (!args_.ffmpegDir.empty()) settings_.ffmpegDir = args_.ffmpegDir;
     if (args_.thumbHeight > 0)    settings_.thumbHeight = args_.thumbHeight;
@@ -199,7 +230,9 @@ bool MainWindow::Create(HINSTANCE hInst, const AppArgs& args)
     wc.lpszClassName = FVC_CLASS_NAME;
     ::RegisterClassExW(&wc);
 
-    hwnd_ = ::CreateWindowExW(0, FVC_CLASS_NAME, FVC_WND_TITLE,
+    hwnd_ = ::CreateWindowExW(0, FVC_CLASS_NAME,
+                              TR(L"FastVideoCut - 黑屏自动剪辑工具 (ffmpeg 无损剪切)",
+                                 L"FastVideoCut - black frame cutter (ffmpeg lossless trim)"),
                               WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                               CW_USEDEFAULT, CW_USEDEFAULT, 1400, 880,
                               nullptr, nullptr, hInst, this);
@@ -261,13 +294,14 @@ void MainWindow::CreateChildren()
     bgBrush_ = ::CreateSolidBrush(RGB(24, 26, 31));
 
     // ---- toolbar buttons --------------------------------------------------
-    buttonCount_ = kButtonCount;
-    for (int i = 0; i < kButtonCount; ++i)
+    const BtnDef* btns = ToolbarButtons(btnDefs_);
+    buttonCount_ = TB_Count;
+    for (int i = 0; i < buttonCount_; ++i)
     {
-        buttons_[i] = ::CreateWindowExW(0, L"BUTTON", kButtons[i].text,
+        buttons_[i] = ::CreateWindowExW(0, L"BUTTON", btns[i].text,
                                         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                                         0, 0, 10, 10, hwnd_,
-                                        (HMENU)(INT_PTR)kButtons[i].id, hInst_, nullptr);
+                                        (HMENU)(INT_PTR)btns[i].id, hInst_, nullptr);
         ::SendMessageW(buttons_[i], WM_SETFONT, (WPARAM)fontUi_, TRUE);
     }
 
@@ -284,19 +318,19 @@ void MainWindow::CreateChildren()
     struct ColDef { const wchar_t* text; int width; int fmt; };
     const ColDef cols[] =
     {
-        { L"#",        36,  LVCFMT_RIGHT  },
-        { L"文件",     250, LVCFMT_LEFT   },
-        { L"状态",     96,  LVCFMT_LEFT   },
-        { L"时长",     80,  LVCFMT_RIGHT  },
-        { L"分辨率",   86,  LVCFMT_LEFT   },
-        { L"规格",     96,  LVCFMT_LEFT   },   // HDR/SDR + 位深
-        { L"黑屏段",   60,  LVCFMT_RIGHT  },
-        { L"黑屏时长", 80,  LVCFMT_RIGHT  },
-        { L"起始时间", 104, LVCFMT_RIGHT  },
-        { L"结束时间", 104, LVCFMT_RIGHT  },
-        { L"保留时长", 80,  LVCFMT_RIGHT  },
-        { L"已选段",   64,  LVCFMT_RIGHT  },
-        { L"大小",     82,  LVCFMT_RIGHT  }
+        { L"#",            36,  LVCFMT_RIGHT  },
+        { TR(L"文件", L"File"),           250, LVCFMT_LEFT   },
+        { TR(L"状态", L"Status"),          96,  LVCFMT_LEFT   },
+        { TR(L"时长", L"Length"),          80,  LVCFMT_RIGHT  },
+        { TR(L"分辨率", L"Resolution"),    86,  LVCFMT_LEFT   },
+        { TR(L"规格", L"Format"),          96,  LVCFMT_LEFT   },   // HDR/SDR + 位深
+        { TR(L"黑屏段", L"Black"),         60,  LVCFMT_RIGHT  },
+        { TR(L"黑屏时长", L"Black len"),   80,  LVCFMT_RIGHT  },
+        { TR(L"起始时间", L"Start"),      104, LVCFMT_RIGHT  },
+        { TR(L"结束时间", L"End"),        104, LVCFMT_RIGHT  },
+        { TR(L"保留时长", L"Kept len"),    80,  LVCFMT_RIGHT  },
+        { TR(L"已选段", L"Segments"),      64,  LVCFMT_RIGHT  },
+        { TR(L"大小", L"Size"),            82,  LVCFMT_RIGHT  }
     };
     for (int i = 0; i < (int)(sizeof(cols) / sizeof(cols[0])); ++i)
     {
@@ -311,6 +345,8 @@ void MainWindow::CreateChildren()
     }
 
     // ---- timeline ---------------------------------------------------------
+    // 缩略图开关必须在 Create 之前设置好（默认关闭：只做黑屏检测）
+    timeline_.SetThumbsEnabled(settings_.makeThumbs);
     timeline_.Create(hwnd_, IDC_TIMELINE, hInst_);
     timeline_.Attach(&project_, &ffmpeg_, &settings_);
 
@@ -362,8 +398,9 @@ void MainWindow::ApplyListMode(bool save)
     }
 
     // 按钮文字显示“点一下会切到哪个视图”
-    if (buttonCount_ >= 10 && buttons_[9])
-        ::SetWindowTextW(buttons_[9], showList_ ? L"视频" : L"列表");
+    if (buttons_[TB_List])
+        ::SetWindowTextW(buttons_[TB_List], showList_ ? TR(L"视频", L"Videos")
+                                                      : TR(L"列表", L"List"));
 
     if (viewMenu_)
         ::CheckMenuItem(viewMenu_, IDM_VIEW_LIST,
@@ -379,8 +416,10 @@ void MainWindow::ToggleFileList()
 {
     showList_ = !showList_;
     ApplyListMode(true);
-    AppendLog(showList_ ? L"左侧切换为文件列表（隐藏视频列表）"
-                        : L"左侧切换为视频列表（隐藏文件列表框）");
+    AppendLog(showList_ ? TR(L"左侧切换为文件列表（隐藏视频列表）",
+                                    L"Left pane: file list (video strip hidden)")
+                      : TR(L"左侧切换为视频列表（隐藏文件列表框）",
+                           L"Left pane: video strip (file list hidden)"));
 }
 
 void MainWindow::BuildMenu()
@@ -388,67 +427,69 @@ void MainWindow::BuildMenu()
     HMENU bar = ::CreateMenu();
 
     HMENU file = ::CreatePopupMenu();
-    ::AppendMenuW(file, MF_STRING, IDM_FILE_ADD,      L"添加视频文件(&A)...\tCtrl+O");
-    ::AppendMenuW(file, MF_STRING, IDM_FILE_ADDDIR,   L"添加整个文件夹(&D)...");
+    ::AppendMenuW(file, MF_STRING, IDM_FILE_ADD,      TR(L"添加视频文件(&A)...\tCtrl+O", L"Add video file(s)(&A)...\tCtrl+O"));
+    ::AppendMenuW(file, MF_STRING, IDM_FILE_ADDDIR,   TR(L"添加整个文件夹(&D)...", L"Add a folder(&D)..."));
     ::AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(file, MF_STRING, IDM_FILE_REMOVE,   L"移除选中(&R)");
-    ::AppendMenuW(file, MF_STRING, IDM_FILE_CLEAR,    L"清空列表(&C)");
+    ::AppendMenuW(file, MF_STRING, IDM_FILE_REMOVE,   TR(L"移除选中(&R)", L"Remove selected(&R)"));
+    ::AppendMenuW(file, MF_STRING, IDM_FILE_CLEAR,    TR(L"清空列表(&C)", L"Clear the list(&C)"));
     ::AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(file, MF_STRING, IDM_FILE_EXIT,     L"退出(&X)");
-    ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)file, L"文件(&F)");
+    ::AppendMenuW(file, MF_STRING, IDM_FILE_EXIT,     TR(L"退出(&X)", L"Exit(&X)"));
+    ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)file, TR(L"文件(&F)", L"File(&F)"));
 
     HMENU vid = ::CreatePopupMenu();
-    ::AppendMenuW(vid, MF_STRING, IDM_VID_DETECT,     L"检测黑屏（跳过已检测）(&B)\tF6");
-    ::AppendMenuW(vid, MF_STRING, IDM_VID_REDETECT,   L"重新检测全部黑屏(&R)\tShift+F6");
-    ::AppendMenuW(vid, MF_STRING, IDM_VID_ANALYZE_ONE, L"重新分析选中的视频(&N)\tCtrl+F6");
+    ::AppendMenuW(vid, MF_STRING, IDM_VID_DETECT,     TR(L"检测黑屏（跳过已检测）(&B)\tF6", L"Detect black (skip done)(&B)\tF6"));
+    ::AppendMenuW(vid, MF_STRING, IDM_VID_REDETECT,   TR(L"重新检测全部黑屏(&R)\tShift+F6", L"Re-detect everything(&R)\tShift+F6"));
+    ::AppendMenuW(vid, MF_STRING, IDM_VID_ANALYZE_ONE, TR(L"重新分析选中的视频(&N)\tCtrl+F6", L"Re-analyse selected(&N)\tCtrl+F6"));
     ::AppendMenuW(vid, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(vid, MF_STRING, IDM_EXP_CANCEL,     L"停止当前分析(&C)\tEsc");
-    ::AppendMenuW(vid, MF_STRING, IDM_VID_UP,         L"上移(&U)");
-    ::AppendMenuW(vid, MF_STRING, IDM_VID_DOWN,       L"下移(&W)");
-    ::AppendMenuW(vid, MF_STRING, IDM_VID_SORTNAME,   L"按文件名排序(&S)");
+    ::AppendMenuW(vid, MF_STRING, IDM_EXP_CANCEL,     TR(L"停止当前分析(&C)\tEsc", L"Stop the current job(&C)\tEsc"));
+    ::AppendMenuW(vid, MF_STRING, IDM_VID_UP,         TR(L"上移(&U)", L"Move up(&U)"));
+    ::AppendMenuW(vid, MF_STRING, IDM_VID_DOWN,       TR(L"下移(&W)", L"Move down(&W)"));
+    ::AppendMenuW(vid, MF_STRING, IDM_VID_SORTNAME,   TR(L"按文件名排序(&S)", L"Sort by name(&S)"));
     ::AppendMenuW(vid, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(vid, MF_STRING, IDM_VID_RESET,      L"重置选择（整段保留）(&T)");
-    ::AppendMenuW(vid, MF_STRING, IDM_VID_CLEARCACHE, L"清理缩略图缓存(&L)");
+    ::AppendMenuW(vid, MF_STRING, IDM_VID_RESET,      TR(L"重置选择（整段保留）(&T)", L"Reset selection (keep all)(&T)"));
+    ::AppendMenuW(vid, MF_STRING, IDM_VID_CLEARCACHE, TR(L"清理缩略图缓存(&L)", L"Clear thumbnail cache(&L)"));
     ::AppendMenuW(vid, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(vid, MF_STRING, IDM_VID_SETTINGS,   L"设置(&G)...");
-    ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)vid, L"视频(&V)");
+    ::AppendMenuW(vid, MF_STRING, IDM_VID_SETTINGS,   TR(L"设置(&G)...", L"Settings(&G)..."));
+    ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)vid, TR(L"视频(&V)", L"Video(&V)"));
     vidMenu_ = vid;
 
     HMENU sel = ::CreatePopupMenu();
-    ::AppendMenuW(sel, MF_STRING, IDM_SEL_BODY,  L"保留主体（首末非黑屏段之间）(&B)\tCtrl+B");
-    ::AppendMenuW(sel, MF_STRING, IDM_SEL_ALL,   L"整段保留（含黑屏）(&K)\tCtrl+A");
-    ::AppendMenuW(sel, MF_STRING, IDM_SEL_CLEAR, L"清除选择(&C)\tCtrl+R");
+    ::AppendMenuW(sel, MF_STRING, IDM_SEL_BODY,  TR(L"保留主体（首末非黑屏段之间）(&B)\tCtrl+B", L"Keep the body(&B)\tCtrl+B"));
+    ::AppendMenuW(sel, MF_STRING, IDM_SEL_ALL,   TR(L"整段保留（含黑屏）(&K)\tCtrl+A", L"Keep everything(&K)\tCtrl+A"));
+    ::AppendMenuW(sel, MF_STRING, IDM_SEL_CLEAR, TR(L"清除选择(&C)\tCtrl+R", L"Clear selection(&C)\tCtrl+R"));
     ::AppendMenuW(sel, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(sel, MF_STRING, 0, L"左键=保留起点，右键=保留终点，Ctrl+左键=单段保留");
+    ::AppendMenuW(sel, MF_STRING, 0,
+                  TR(L"左键=保留起点，右键=保留终点，Ctrl+左键=单段保留",
+                     L"Left click = keep start, right click = keep end, Ctrl+click = one segment"));
     ::EnableMenuItem(sel, GetMenuItemCount(sel) - 1, MF_BYPOSITION | MF_GRAYED);
-    ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)sel, L"选择(&S)");
+    ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)sel, TR(L"选择(&S)", L"Select(&S)"));
 
     HMENU exp = ::CreatePopupMenu();
-    ::AppendMenuW(exp, MF_STRING, IDM_EXP_EACH,  L"每个视频单独导出（切掉未选段，无损）(&E)\tF7");
-    ::AppendMenuW(exp, MF_STRING, IDM_EXP_MERGE, L"按列表顺序合并为一个视频（无损）(&M)\tF8");
+    ::AppendMenuW(exp, MF_STRING, IDM_EXP_EACH,  TR(L"每个视频单独导出（切掉未选段，无损）(&E)\tF7", L"Export each video (lossless)(&E)\tF7"));
+    ::AppendMenuW(exp, MF_STRING, IDM_EXP_MERGE, TR(L"按列表顺序合并为一个视频（无损）(&M)\tF8", L"Merge into one file (lossless)(&M)\tF8"));
     ::AppendMenuW(exp, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(exp, MF_STRING, IDM_EXP_ALL,   L"两个都导出(&B)");
+    ::AppendMenuW(exp, MF_STRING, IDM_EXP_ALL,   TR(L"两个都导出(&B)", L"Do both(&B)"));
     ::AppendMenuW(exp, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(exp, MF_STRING, IDM_EXP_OPEN,  L"打开输出文件夹(&D)");
-    ::AppendMenuW(exp, MF_STRING, IDM_EXP_CANCEL,L"取消当前任务(&C)\tEsc");
-    ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)exp, L"导出(&E)");
+    ::AppendMenuW(exp, MF_STRING, IDM_EXP_OPEN,  TR(L"打开输出文件夹(&D)", L"Open the output folder(&D)"));
+    ::AppendMenuW(exp, MF_STRING, IDM_EXP_CANCEL,TR(L"取消当前任务(&C)\tEsc", L"Cancel the current job(&C)\tEsc"));
+    ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)exp, TR(L"导出(&E)", L"Export(&E)"));
 
     HMENU view = ::CreatePopupMenu();
-    ::AppendMenuW(view, MF_STRING, IDM_VIEW_LIST,       L"显示文件列表框(&L)\tCtrl+L");
+    ::AppendMenuW(view, MF_STRING, IDM_VIEW_LIST,       TR(L"显示文件列表框(&L)\tCtrl+L", L"Show the file list(&L)\tCtrl+L"));
     ::AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(view, MF_STRING, IDM_VIEW_FIT,        L"适应窗口(&F)\tF5");
-    ::AppendMenuW(view, MF_STRING, IDM_VIEW_ZIN,        L"放大(&I)");
-    ::AppendMenuW(view, MF_STRING, IDM_VIEW_ZOUT,       L"缩小(&O)");
+    ::AppendMenuW(view, MF_STRING, IDM_VIEW_FIT,        TR(L"适应窗口(&F)\tF5", L"Fit to window(&F)\tF5"));
+    ::AppendMenuW(view, MF_STRING, IDM_VIEW_ZIN,        TR(L"放大(&I)", L"Zoom in(&I)"));
+    ::AppendMenuW(view, MF_STRING, IDM_VIEW_ZOUT,       TR(L"缩小(&O)", L"Zoom out(&O)"));
     ::AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(view, MF_STRING, IDM_VIEW_THUMB_BIG,  L"缩略图更大(&B)");
-    ::AppendMenuW(view, MF_STRING, IDM_VIEW_THUMB_SMALL,L"缩略图更小(&S)");
-    ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)view, L"视图(&W)");
+    ::AppendMenuW(view, MF_STRING, IDM_VIEW_THUMB_BIG,  TR(L"缩略图更大(&B)", L"Bigger thumbnails(&B)"));
+    ::AppendMenuW(view, MF_STRING, IDM_VIEW_THUMB_SMALL,TR(L"缩略图更小(&S)", L"Smaller thumbnails(&S)"));
+    ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)view, TR(L"视图(&W)", L"View(&W)"));
     viewMenu_ = view;
 
     HMENU help = ::CreatePopupMenu();
-    ::AppendMenuW(help, MF_STRING, IDM_HELP_INFO,  L"使用说明(&H)");
-    ::AppendMenuW(help, MF_STRING, IDM_HELP_ABOUT, L"关于(&A)");
-    ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)help, L"帮助(&H)");
+    ::AppendMenuW(help, MF_STRING, IDM_HELP_INFO,  TR(L"使用说明(&H)", L"Usage guide(&H)"));
+    ::AppendMenuW(help, MF_STRING, IDM_HELP_ABOUT, TR(L"关于(&A)", L"About(&A)"));
+    ::AppendMenuW(bar, MF_POPUP, (UINT_PTR)help, TR(L"帮助(&H)", L"Help(&H)"));
 
     ::SetMenu(hwnd_, bar);
 }
@@ -469,8 +510,9 @@ void MainWindow::LayoutChildren()
     int progW   = MulDiv(190, s, 96);
 
     // ---- toolbar ---------------------------------------------------------
-    // 顺序与 kButtons 一致：添加/移除/上移/下移/自动分析/导出/清理缩略图/设置/说明/列表
-    int widths[] = { 96, 62, 62, 62, 92, 92, 104, 62, 62, 74 };
+    // 顺序与 ToolbarButtons() 一致：添加/移除/清空/上移/下移/自动分析/导出/
+    // 清理缩略图/设置/说明/列表
+    int widths[] = { 96, 62, 78, 62, 62, 92, 92, 104, 62, 62, 74 };
     int x = pad;
     for (int i = 0; i < buttonCount_; ++i)
     {
@@ -619,7 +661,8 @@ LRESULT MainWindow::WndProc(UINT msg, WPARAM wp, LPARAM lp)
         if (jobRunning_ && !args_.noGui)
         {
             int r = ::MessageBoxW(hwnd_,
-                                  L"当前还有任务在运行，确定要退出吗？",
+                                  TR(L"当前还有任务在运行，确定要退出吗？",
+                                     L"A job is still running. Quit anyway?"),
                                   L"FastVideoCut", MB_ICONQUESTION | MB_YESNO);
             if (r != IDYES) return 0;
         }
@@ -686,13 +729,13 @@ LRESULT MainWindow::WndProc(UINT msg, WPARAM wp, LPARAM lp)
 
                 HMENU m = ::CreatePopupMenu();
                 ::AppendMenuW(m, MF_STRING, IDM_VID_ANALYZE_ONE,
-                              L"重新分析这个视频(&N)");
+                              TR(L"重新分析这个视频(&N)", L"Re-analyse this video(&N)"));
                 ::AppendMenuW(m, MF_STRING, IDM_SEL_BODY,
-                              L"保留主体（首末非黑屏段之间）(&B)");
+                              TR(L"保留主体（首末非黑屏段之间）(&B)", L"Keep the body(&B)"));
                 ::AppendMenuW(m, MF_STRING, IDM_SEL_ALL,
-                              L"整段保留（含黑屏）(&K)");
+                              TR(L"整段保留（含黑屏）(&K)", L"Keep everything(&K)"));
                 ::AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-                ::AppendMenuW(m, MF_STRING, IDM_FILE_REMOVE, L"移除(&R)");
+                ::AppendMenuW(m, MF_STRING, IDM_FILE_REMOVE, TR(L"移除(&R)", L"Remove(&R)"));
                 POINT pt;
                 ::GetCursorPos(&pt);
                 int cmd = (int)::TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN,
@@ -883,23 +926,30 @@ void MainWindow::UpdateTitles()
     double keep = project_.SelectedDuration();
     // 标题栏不再显示黑屏段数（导出前的分析中间量，对用户没有决策价值）
     std::wstring title = FormatString(
-        L"FastVideoCut - %d 个视频 | 总时长 %s | 保留 %s",
+        TR(L"FastVideoCut - %d 个视频 | 总时长 %s | 保留 %s",
+           L"FastVideoCut - %d videos | total %s | kept %s"),
         n, FormatClock(total).c_str(), FormatClock(keep).c_str());
     ::SetWindowTextW(hwnd_, title.c_str());
 
     std::wstring ffName = ffmpeg_.available()
                               ? PathGetFileName(ffmpeg_.paths().ffmpeg)
-                              : std::wstring(L"未找到 (请在设置里指定)");
+                              : std::wstring(TR(L"未找到 (请在设置里指定)",
+                                                L"not found (set it in Settings)"));
     double pct = (total > 0.0) ? (keep * 100.0 / total) : 0.0;
-    SetStatus(FormatString(L"已选 %d 段 · 保留 %s (%.1f%%) · ffmpeg: %s",
+    SetStatus(FormatString(TR(L"已选 %d 段 · 保留 %s (%.1f%%) · ffmpeg: %s",
+                               L"%d segments kept - %s (%.1f%%) - ffmpeg: %s"),
                            project_.SelectedSegmentCount(), FormatClock(keep).c_str(),
                            pct, ffName.c_str()));
 
     ::SetWindowTextW(help_,
-        L"左键分段 = 保留起点，右键分段 = 保留终点（两者之间全部保留）| Ctrl+左键 = 单段保留/取消 | "
-        L"双击 = 只保留该段 | 列表双击/右键 = 重新分析这个视频 | 点击任一分段都会在右侧预览播放 | "
-        L"滚轮 = 上下滚动视频 | Ctrl+滚轮 = 缩放，Shift+滚轮 = 横向平移，中键拖动 = 平移 | "
-        L"工具栏“列表” = 文件列表/视频列表切换");
+        TR(L"左键分段 = 保留起点，右键分段 = 保留终点（两者之间全部保留）| Ctrl+左键 = 单段保留/取消 | "
+           L"双击 = 只保留该段 | 列表双击/右键 = 重新分析这个视频 | 点击任一分段都会在右侧预览播放 | "
+           L"滚轮 = 上下滚动视频 | Ctrl+滚轮 = 缩放，Shift+滚轮 = 横向平移，中键拖动 = 平移 | "
+           L"工具栏“列表” = 文件列表/视频列表切换",
+           L"Left click = keep start, right click = keep end | Ctrl+click = toggle one segment | "
+           L"double click = keep only that segment | double click / right click a row = re-analyse it | "
+           L"clicking a segment previews it on the right | wheel = scroll videos | Ctrl+wheel = zoom | "
+           L"Shift+wheel or middle drag = pan | toolbar “List” = file list / video strip"));
 }
 
 void MainWindow::UpdateButtonStates()
@@ -912,19 +962,22 @@ void MainWindow::UpdateButtonStates()
     bool detecting = busy && currentJob_ == JobDetect;
 
     // 分析进行中：工具栏按钮变成“停止分析”并保持可点，随时可以中断
-    if (buttonCount_ >= 5 && buttons_[4])
-        ::SetWindowTextW(buttons_[4], detecting ? L"停止分析" : L"自动分析");
+    if (buttonCount_ >= 5 && buttons_[TB_Detect])
+        ::SetWindowTextW(buttons_[TB_Detect], detecting ? TR(L"停止分析", L"Stop")
+                                                    : TR(L"自动分析", L"Analyse"));
 
-    ::EnableWindow(buttons_[0], !busy);
-    ::EnableWindow(buttons_[1], !busy && hasItems);
-    ::EnableWindow(buttons_[2], !busy && sel > 0);
-    ::EnableWindow(buttons_[3], !busy && sel >= 0 && sel + 1 < (int)project_.items.size());
-    ::EnableWindow(buttons_[4], detecting || (!busy && hasItems && hasFf));
-    ::EnableWindow(buttons_[5], !busy && hasItems && hasFf && hasSel);
-    ::EnableWindow(buttons_[6], !busy);
-    ::EnableWindow(buttons_[7], !busy);
-    ::EnableWindow(buttons_[8], TRUE);
-    ::EnableWindow(buttons_[9], TRUE);      // 列表/视频 视图切换随时可用
+    ::EnableWindow(buttons_[TB_Add],    !busy);
+    ::EnableWindow(buttons_[TB_Remove], !busy && hasItems);
+    ::EnableWindow(buttons_[TB_Clear],  !busy && hasItems);
+    ::EnableWindow(buttons_[TB_Up],     !busy && sel > 0);
+    ::EnableWindow(buttons_[TB_Down],   !busy && sel >= 0 && sel + 1 < (int)project_.items.size());
+    ::EnableWindow(buttons_[TB_Detect], detecting || (!busy && hasItems && hasFf));
+    ::EnableWindow(buttons_[TB_Export], !busy && hasItems && hasFf && hasSel);
+    // 没开“生成缩略图”时，清理缩略图缓存没有意义，直接置灰
+    ::EnableWindow(buttons_[TB_ClearCache], !busy && settings_.makeThumbs);
+    ::EnableWindow(buttons_[TB_Settings],   !busy);
+    ::EnableWindow(buttons_[TB_Info],      TRUE);
+    ::EnableWindow(buttons_[TB_List],      TRUE);      // 列表/视频 视图切换随时可用
 
     if (vidMenu_)
     {
@@ -934,6 +987,8 @@ void MainWindow::UpdateButtonStates()
                          MF_BYCOMMAND | (canOne ? MF_ENABLED : MF_GRAYED));
         ::EnableMenuItem(vidMenu_, IDM_EXP_CANCEL,
                          MF_BYCOMMAND | (busy ? MF_ENABLED : MF_GRAYED));
+        ::EnableMenuItem(vidMenu_, IDM_VID_CLEARCACHE,
+                         MF_BYCOMMAND | (settings_.makeThumbs ? MF_ENABLED : MF_GRAYED));
     }
 }
 
@@ -969,11 +1024,14 @@ void MainWindow::OnAddFiles(std::vector<std::wstring>* files)
         timeline_.Refresh();
         UpdateTitles();
         UpdateButtonStates();
-        AppendLog(FormatString(L"添加 %d 个视频（重复 %d，不支持 %d）", added, dup, bad));
+        AppendLog(FormatString(TR(L"添加 %d 个视频（重复 %d，不支持 %d）",
+                                L"added %d video(s) (%d duplicate, %d unsupported)"),
+                           added, dup, bad));
     }
     else
     {
-        AppendLog(FormatString(L"没有添加视频（重复 %d，不支持/不存在 %d）", dup, bad));
+        AppendLog(FormatString(TR(L"没有添加视频（重复 %d，不支持/不存在 %d）",
+                                L"nothing added (%d duplicate, %d unsupported or missing)"), dup, bad));
     }
 }
 
@@ -1005,7 +1063,8 @@ void MainWindow::LogKeepChange(int itemIndex)
         }
         else
         {
-            AppendLog(FormatString(L"保留：%s → %s  （%d/%d 段，共 %s）",
+            AppendLog(FormatString(TR(L"保留：%s → %s  （%d/%d 段，共 %s）",
+                                L"keep: %s -> %s  (%d/%d segments, %s)"),
                                    it.name.c_str(), range.c_str(),
                                    it.selectedSegmentCount(), (int)it.segments.size(),
                                    FormatClock(it.selectedDuration()).c_str()));
@@ -1016,7 +1075,8 @@ void MainWindow::LogKeepChange(int itemIndex)
     if (itemIndex < 0)
     {
         int n = (int)project_.items.size();
-        AppendLog(FormatString(L"保留：已更新 %d 个视频，合计保留 %s",
+        AppendLog(FormatString(TR(L"保留：已更新 %d 个视频，合计保留 %s",
+                                L"keep: updated %d video(s), %s kept in total"),
                                n, FormatClock(project_.SelectedDuration()).c_str()));
     }
 }
@@ -1034,9 +1094,9 @@ void MainWindow::StartSegmentPreview(int itemIndex, int segIndex)
     preview_.SetFfmpeg(ffmpeg_.paths().ffmpeg);
     preview_.Play(it.path, s.t0, s.t1,
                   it.info.width, it.info.height, it.info.fps, it.info.hasAudio,
-                  FormatString(L"%s · 第 %d 段%s",
+                  FormatString(TR(L"%s · 第 %d 段%s", L"%s - part %d%s"),
                                it.name.c_str(), segIndex + 1,
-                               s.kind == SegKind::Black ? L"（黑屏）" : L""));
+                               s.kind == SegKind::Black ? TR(L"（黑屏）", L" (black)") : L""));
 }
 
 // ---------------------------------------------------------------------------
@@ -1184,11 +1244,13 @@ void MainWindow::OnCommand(int id)
         ofn.lStructSize = sizeof(ofn);
         ofn.hwndOwner = hwnd_;
         ofn.lpstrFilter =
-            L"视频文件\0*.mp4;*.mkv;*.mov;*.avi;*.flv;*.wmv;*.ts;*.m2ts;*.mts;*.mpg;*.mpeg;*.m4v;*.webm;*.rmvb;*.3gp;*.vob;*.mxf\0"
-            L"所有文件\0*.*\0\0";
+            TR(L"视频文件\0*.mp4;*.mkv;*.mov;*.avi;*.flv;*.wmv;*.ts;*.m2ts;*.mts;*.mpg;*.mpeg;*.m4v;*.webm;*.rmvb;*.3gp;*.vob;*.mxf\0"
+           L"所有文件\0*.*\0\0",
+           L"Video files\0*.mp4;*.mkv;*.mov;*.avi;*.flv;*.wmv;*.ts;*.m2ts;*.mts;*.mpg;*.mpeg;*.m4v;*.webm;*.rmvb;*.3gp;*.vob;*.mxf\0"
+           L"All files\0*.*\0\0");
         ofn.lpstrFile = &buf[0];
         ofn.nMaxFile = (DWORD)buf.size();
-        ofn.lpstrTitle = L"选择视频文件（可多选）";
+        ofn.lpstrTitle = TR(L"选择视频文件（可多选）", L"Pick video files (multi-select)");
         std::wstring initDir = settings_.lastAddDir;
         if (!initDir.empty() && DirectoryExists(initDir)) ofn.lpstrInitialDir = initDir.c_str();
         ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT | OFN_HIDEREADONLY;
@@ -1205,7 +1267,7 @@ void MainWindow::OnCommand(int id)
         BROWSEINFOW bi;
         ::ZeroMemory(&bi, sizeof(bi));
         bi.hwndOwner = hwnd_;
-        bi.lpszTitle = L"选择包含视频文件的文件夹";
+        bi.lpszTitle = TR(L"选择包含视频文件的文件夹", L"Pick a folder that contains video files");
         bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_USENEWUI;
         LPITEMIDLIST pidl = ::SHBrowseForFolderW(&bi);
         if (pidl)
@@ -1237,15 +1299,21 @@ void MainWindow::OnCommand(int id)
         break;
     }
 
+    case IDB_CLEARLIST:
     case IDM_FILE_CLEAR:
         if (!project_.items.empty())
         {
-            if (::MessageBoxW(hwnd_, L"确定清空视频列表吗？", L"FastVideoCut",
+            if (::MessageBoxW(hwnd_,
+                              TR(L"确定清空视频列表吗？",
+                                 L"Clear the whole video list?"),
+                              L"FastVideoCut",
                               MB_ICONQUESTION | MB_YESNO) != IDYES)
                 return;
             project_.Clear();
             RebuildList();
+            timeline_.SetCurrentItem(-1);
             timeline_.Refresh();
+            AppendLog(TR(L"已清空视频列表", L"Video list cleared"));
         }
         break;
 
@@ -1308,12 +1376,12 @@ void MainWindow::OnCommand(int id)
     case IDB_EXPORT:
     {
         HMENU m = ::CreatePopupMenu();
-        ::AppendMenuW(m, MF_STRING, IDM_EXP_EACH, L"每个视频单独导出（切掉未选段，无损）");
-        ::AppendMenuW(m, MF_STRING, IDM_EXP_MERGE, L"按列表顺序合并为一个视频（无损）");
+        ::AppendMenuW(m, MF_STRING, IDM_EXP_EACH, TR(L"每个视频单独导出（切掉未选段，无损）", L"Export each video (lossless)"));
+        ::AppendMenuW(m, MF_STRING, IDM_EXP_MERGE, TR(L"按列表顺序合并为一个视频（无损）", L"Merge into one file (lossless)"));
         ::AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-        ::AppendMenuW(m, MF_STRING, IDM_EXP_ALL, L"两个都导出");
+        ::AppendMenuW(m, MF_STRING, IDM_EXP_ALL, TR(L"两个都导出", L"Do both"));
         RECT rc;
-        ::GetWindowRect(buttons_[5], &rc);
+        ::GetWindowRect(buttons_[TB_Export], &rc);
         int cmd = ::TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN,
                                    rc.left, rc.bottom, 0, hwnd_, nullptr);
         ::DestroyMenu(m);
@@ -1358,7 +1426,7 @@ void MainWindow::OnCommand(int id)
     case IDB_CLEARCACHE:
         ClearThumbCache();
         timeline_.Refresh();
-        AppendLog(L"缩略图缓存已清理");
+        AppendLog(TR(L"缩略图缓存已清理", L"Thumbnail cache cleared"));
         break;
 
     case IDB_SETTINGS:
@@ -1373,13 +1441,19 @@ void MainWindow::OnCommand(int id)
 
     case IDM_HELP_ABOUT:
         ::MessageBoxW(hwnd_,
-                      L"FastVideoCut 1.0\n\n"
-                      L"用 ffmpeg 做后端的黑屏自动剪辑工具：\n"
-                      L"  · 黑屏检测 blackdetect\n"
-                      L"  · 帧流缩略图 tile 快速展开\n"
-                      L"  · 无损剪切 -c copy + concat 合并\n\n"
-                      L"界面: Win32 / C++ (VC++)    后端: ffmpeg.exe",
-                      L"关于 FastVideoCut", MB_ICONINFORMATION);
+                      TR(L"FastVideoCut 1.0\n\n"
+                         L"用 ffmpeg 做后端的黑屏自动剪辑工具：\n"
+                         L"  · 黑屏检测 blackdetect\n"
+                         L"  · 帧流缩略图 tile 快速展开\n"
+                         L"  · 无损剪切 -c copy + concat 合并\n\n"
+                         L"界面: Win32 / C++ (VC++)    后端: ffmpeg.exe",
+                         L"FastVideoCut 1.0\n\n"
+                         L"Black frame auto cutter built on ffmpeg:\n"
+                         L"  - black frame detection (blackdetect)\n"
+                         L"  - timeline thumbnails via tile mosaics\n"
+                         L"  - lossless trimming (-c copy) + concat merge\n\n"
+                         L"UI: Win32 / C++      Backend: ffmpeg.exe"),
+                      TR(L"关于 FastVideoCut", L"About FastVideoCut"), MB_ICONINFORMATION);
         break;
 
     // ---- view ------------------------------------------------------------
@@ -1446,18 +1520,21 @@ void MainWindow::StartJobInternal(int job, bool detectAll, int onlyIndex)
         }
         int skipped = (int)project_.items.size() - (int)todo.size();
 
-        SetBusy(true, L"正在检测黑屏…");
+        SetBusy(true, TR(L"正在检测黑屏…", L"Analysing black frames..."));
         if (onlyIndex >= 0)
-            AppendLog(FormatString(L"开始重新分析单个视频：%s (d=%.2fs pix_th=%.2f pic_th=%.2f)",
+            AppendLog(FormatString(TR(L"开始重新分析单个视频：%s (d=%.2fs pix_th=%.2f pic_th=%.2f)",
+                               L"Re-analysing one video: %s (d=%.2fs pix_th=%.2f pic_th=%.2f)"),
                                    project_.items[(size_t)onlyIndex].name.c_str(),
                                    settings_.blackMinDuration, settings_.blackPixTh,
                                    settings_.blackPicTh));
         else if (detectAll)
-            AppendLog(FormatString(L"开始检测黑屏：全部 %d 个视频 (d=%.2fs pix_th=%.2f pic_th=%.2f)",
+            AppendLog(FormatString(TR(L"开始检测黑屏：全部 %d 个视频 (d=%.2fs pix_th=%.2f pic_th=%.2f)",
+                               L"Analysing all %d video(s) (d=%.2fs pix_th=%.2f pic_th=%.2f)"),
                                    (int)project_.items.size(),
                                    settings_.blackMinDuration, settings_.blackPixTh, settings_.blackPicTh));
         else
-            AppendLog(FormatString(L"开始检测黑屏：%d 个待检测，跳过 %d 个已检测 (d=%.2fs pix_th=%.2f pic_th=%.2f)",
+            AppendLog(FormatString(TR(L"开始检测黑屏：%d 个待检测，跳过 %d 个已检测 (d=%.2fs pix_th=%.2f pic_th=%.2f)",
+                               L"Analysing: %d to do, %d already done (d=%.2fs pix_th=%.2f pic_th=%.2f)"),
                                    (int)todo.size(), skipped,
                                    settings_.blackMinDuration, settings_.blackPixTh, settings_.blackPicTh));
 
@@ -1471,10 +1548,12 @@ void MainWindow::StartJobInternal(int job, bool detectAll, int onlyIndex)
     }
     else
     {
-        SetBusy(true, L"正在导出…");
+        SetBusy(true, TR(L"正在导出…", L"Exporting..."));
         AppendLog(job == JobCutEach
-                      ? L"开始导出：每个视频单独裁剪（切掉未选段，无损流复制）"
-                      : L"开始导出：按列表顺序合并为一个视频（无损流复制）");
+                      ? TR(L"开始导出：每个视频单独裁剪（切掉未选段，无损流复制）",
+                           L"Export: cut each video separately (lossless stream copy)")
+                      : TR(L"开始导出：按列表顺序合并为一个视频（无损流复制）",
+                           L"Export: merge all videos in list order (lossless stream copy)"));
     }
 
     timeline_.Refresh();
@@ -1487,7 +1566,8 @@ void MainWindow::StartDetect(bool forceAll)
     if (jobRunning_) return;
     if (project_.items.empty())
     {
-        Notify(L"请先添加视频文件（“添加视频”按钮或直接把文件拖进窗口）。", MB_ICONINFORMATION);
+        Notify(TR(L"请先添加视频文件（“添加视频”按钮或直接把文件拖进窗口）。",
+                    L"Add some video files first (button or drag & drop)."), MB_ICONINFORMATION);
         return;
     }
     if (!ffmpeg_.available())
@@ -1502,13 +1582,16 @@ void MainWindow::StartDetect(bool forceAll)
     {
         if (args_.noGui)
         {
-            AppendLog(L"所有视频都已经检测过，无需重复检测（如需强制重检请用 Shift+F6）。");
+            AppendLog(TR(L"所有视频都已经检测过，无需重复检测（如需强制重检请用 Shift+F6）。",
+                   L"Every video was analysed already (use Shift+F6 to force a full re-check)."));
             return;
         }
         int r = ::MessageBoxW(hwnd_,
-                              L"所有视频都已经检测过黑屏了。\n\n"
-                              L"是：重新检测全部视频\n否：什么都不做",
-                              L"检测黑屏", MB_ICONQUESTION | MB_YESNO);
+                              TR(L"所有视频都已经检测过黑屏了。\n\n"
+                                 L"是：重新检测全部视频\n否：什么都不做",
+                                 L"Every video was analysed already.\n\n"
+                                 L"Yes: re-analyse all of them\nNo: do nothing"),
+                              TR(L"检测黑屏", L"Detect black"), MB_ICONQUESTION | MB_YESNO);
         if (r != IDYES) return;
         forceAll = true;
     }
@@ -1523,13 +1606,17 @@ void MainWindow::StartDetectOne(int index)
     if (jobRunning_) return;
     if (index < 0 || index >= (int)project_.items.size())
     {
-        Notify(L"请先在列表里选中一个视频。", MB_ICONINFORMATION);
+        Notify(TR(L"请先在列表里选中一个视频。", L"Select a video in the list first."),
+             MB_ICONINFORMATION);
         return;
     }
     if (!ffmpeg_.available())
     {
-        Notify(L"没有找到 ffmpeg.exe / ffprobe.exe。\n\n"
-               L"请把 ffmpeg 的 bin 目录放到程序目录下，或在“设置”里指定路径。", MB_ICONWARNING);
+        Notify(TR(L"没有找到 ffmpeg.exe / ffprobe.exe。\n\n"
+                     L"请把 ffmpeg 的 bin 目录放到程序目录下，或在“设置”里指定路径。",
+                     L"ffmpeg.exe / ffprobe.exe not found.\n\n"
+                     L"Put the ffmpeg bin folder next to the exe, or set it in Settings."),
+                 MB_ICONWARNING);
         return;
     }
 
@@ -1542,12 +1629,14 @@ void MainWindow::StartExport(int job)
     if (jobRunning_) return;
     if (project_.items.empty())
     {
-        Notify(L"请先添加视频文件。", MB_ICONINFORMATION);
+        Notify(TR(L"请先添加视频文件。", L"Add some video files first."), MB_ICONINFORMATION);
         return;
     }
     if (!ffmpeg_.available())
     {
-        Notify(L"没有找到 ffmpeg.exe / ffprobe.exe，无法导出。", MB_ICONWARNING);
+        Notify(TR(L"没有找到 ffmpeg.exe / ffprobe.exe，无法导出。",
+                     L"ffmpeg.exe / ffprobe.exe not found, cannot export."),
+                 MB_ICONWARNING);
         return;
     }
 
@@ -1561,10 +1650,14 @@ void MainWindow::StartExport(int job)
         if (!args_.noGui)
         {
             r = ::MessageBoxW(hwnd_,
-                              FormatString(L"还有 %d 个视频没有检测黑屏。\n\n"
+                              FormatString(TR(L"还有 %d 个视频没有检测黑屏。\n\n"
                                            L"是：先检测黑屏，然后继续导出\n"
                                            L"否：直接导出（这些视频整段保留）\n"
-                                           L"取消：什么都不做", pending).c_str(),
+                                           L"取消：什么都不做",
+                                           L"%d video(s) have not been analysed yet.\n\n"
+                                           L"Yes: analyse them first, then export\n"
+                                           L"No: export anyway (those are kept whole)\n"
+                                           L"Cancel: do nothing"), pending).c_str(),
                               L"FastVideoCut", MB_ICONQUESTION | MB_YESNOCANCEL);
         }
         if (r == IDCANCEL) return;
@@ -1578,8 +1671,11 @@ void MainWindow::StartExport(int job)
 
     if (project_.SelectedDuration() <= 0.0)
     {
-        Notify(L"当前没有任何选中（高亮）的分段，导出结果会是空的。\n\n"
-               L"提示：默认会保留所有非黑屏分段，黑屏分段默认不选中。", MB_ICONINFORMATION);
+        Notify(TR(L"当前没有任何选中（高亮）的分段，导出结果会是空的。\n\n"
+                    L"提示：默认会保留所有非黑屏分段，黑屏分段默认不选中。",
+                    L"No segment is selected, so the export would be empty.\n\n"
+                    L"Tip: by default every non-black segment is kept, black ones are not."),
+                 MB_ICONINFORMATION);
         return;
     }
 
@@ -1590,8 +1686,8 @@ void MainWindow::CancelJob()
 {
     if (!jobRunning_) return;
     if (cancel_.ev) ::SetEvent(cancel_.ev);
-    AppendLog(L"已请求取消当前任务…");
-    SetStatus(L"正在取消…");
+    AppendLog(TR(L"已请求取消当前任务…", L"Cancel requested..."));
+    SetStatus(TR(L"正在取消…", L"Cancelling..."));
 }
 
 void MainWindow::OnJobFinished(int job, bool ok, const std::wstring& summary)
@@ -1604,7 +1700,8 @@ void MainWindow::OnJobFinished(int job, bool ok, const std::wstring& summary)
     ::SendMessageW(progress_, PBM_SETPOS, ok ? 100 : 0, 0);
 
     if (!summary.empty()) AppendLog(summary);
-    AppendLog(ok ? L"任务完成。" : L"任务结束（失败或已取消）。");
+    AppendLog(ok ? TR(L"任务完成。", L"Task finished.")
+                   : TR(L"任务结束（失败或已取消）。", L"Task ended (failed or cancelled)."));
     if (!ok) exitCode_ = 1;
 
     int chain = nextJob_;
@@ -1621,7 +1718,8 @@ void MainWindow::OnJobFinished(int job, bool ok, const std::wstring& summary)
             StartJobInternal(chain);
             return;
         }
-        AppendLog(L"上一个任务失败，跳过后续任务。");
+        AppendLog(TR(L"上一个任务失败，跳过后续任务。",
+                   L"The previous task failed, skipping the rest."));
     }
 
     if (args_.quitOnEnd)
@@ -1636,8 +1734,9 @@ void MainWindow::OnJobFinished(int job, bool ok, const std::wstring& summary)
         if (settings_.confirmBeforeExport && !args_.noGui)
         {
             int r = ::MessageBoxW(hwnd_,
-                                  FormatString(L"导出完成：\n%s\n\n是否打开输出文件夹？",
-                                               lastOutput_.c_str()).c_str(),
+                                  FormatString(TR(L"导出完成：\n%s\n\n是否打开输出文件夹？",
+                                             L"Export finished:\n%s\n\nOpen the output folder?"),
+                                             lastOutput_.c_str()).c_str(),
                                   L"FastVideoCut", MB_ICONINFORMATION | MB_YESNO);
             if (r == IDYES)
             {
@@ -1682,7 +1781,7 @@ void MainWindow::JobThreadMain(int job, bool detectAll, int onlyIndex)
 
         for (int idx = 0; idx < total; ++idx)
         {
-            if (cancel_.IsCancelled()) { ok = false; summary = L"检测已取消"; break; }
+            if (cancel_.IsCancelled()) { ok = false; summary = TR(L"检测已取消", L"Detection cancelled"); break; }
 
             int i = todo[(size_t)idx];
             VideoItem& it = project_.items[i];
@@ -1699,7 +1798,7 @@ void MainWindow::JobThreadMain(int job, bool detectAll, int onlyIndex)
             if (!ffmpeg_.Probe(it.path, info, err, cancel_))
             {
                 it.status = ItemStatus::Error;
-                it.message = L"读取失败: " + Utf8ToWide(err);
+                it.message = TR(L"读取失败: ", L"Probe failed: ") + Utf8ToWide(err);
                 ++failed;
                 PostUiMessage(hwnd_, UiItemUpdated, L"", i);
                 PostUiMessage(hwnd_, UiLog,
@@ -1722,11 +1821,12 @@ void MainWindow::JobThreadMain(int job, bool detectAll, int onlyIndex)
                     PostUiMessage(hwnd_, UiProgress, L"", (int)(p * 100.0 + 0.5), i);
                 }, cancel_, derr);
 
-            if (cancel_.IsCancelled()) { ok = false; summary = L"检测已取消"; break; }
+            if (cancel_.IsCancelled()) { ok = false; summary = TR(L"检测已取消", L"Detection cancelled"); break; }
 
             if (!detOk)
                 PostUiMessage(hwnd_, UiLog,
-                              FormatString(L"%s 黑屏检测失败（按无黑屏处理）：%s",
+                              FormatString(TR(L"%s 黑屏检测失败（按无黑屏处理）：%s",
+                                     L"%s black detection failed (treated as no black): %s"),
                                            it.name.c_str(), Utf8ToWide(derr).c_str()));
 
             it.blacks = blacks;
@@ -1738,7 +1838,8 @@ void MainWindow::JobThreadMain(int job, bool detectAll, int onlyIndex)
 
             PostUiMessage(hwnd_, UiItemUpdated, L"", i);
             PostUiMessage(hwnd_, UiLog,
-                          FormatString(L"%s：%s，%s，黑屏 %d 段（合计 %s）",
+                          FormatString(TR(L"%s：%s，%s，黑屏 %d 段（合计 %s）",
+                                       L"%s: %s, %s, %d black segment(s) (%s)"),
                                        it.name.c_str(), it.summaryText().c_str(),
                                        Utf8ToWide(it.info.formatLabel()).c_str(),
                                        (int)blacks.size(),
@@ -1746,7 +1847,7 @@ void MainWindow::JobThreadMain(int job, bool detectAll, int onlyIndex)
             if (!blacks.empty())
             {
                 PostUiMessage(hwnd_, UiLog,
-                              FormatString(L"  · 黑屏位置：%s",
+                              FormatString(TR(L"  · 黑屏位置：%s", L"  - black ranges: %s"),
                                            BlackRangesText(blacks, 12).c_str()));
             }
             PostUiMessage(hwnd_, UiSelectItem, L"", i);
@@ -1760,23 +1861,27 @@ void MainWindow::JobThreadMain(int job, bool detectAll, int onlyIndex)
         if (summary.empty())
         {
             if (onlyIndex >= 0)
-                summary = FormatString(L"重新分析完成：黑屏 %d 段（%s）",
+                summary = FormatString(TR(L"重新分析完成：黑屏 %d 段（%s）",
+                                 L"Re-analysis finished: %d black segment(s) (%s)"),
                                        blackTotal, FormatClock(totalBlackDuration).c_str());
             else
-                summary = FormatString(L"检测结束：%d 个视频（跳过 %d 个已检测），黑屏共 %d 段（失败 %d 个）",
+                summary = FormatString(TR(L"检测结束：%d 个视频（跳过 %d 个已检测），黑屏共 %d 段（失败 %d 个）",
+                                 L"Detection finished: %d video(s) (%d skipped), %d black segment(s), %d failed"),
                                        total, skipped, blackTotal, failed);
         }
     }
     else if (job == JobOpenOnly)
     {
-        summary = L"输出目录：\n" + lastOutputDir_;
+        summary = TR(L"输出目录：\n", L"Output folder:\n") + lastOutputDir_;
     }
     else
     {
         std::vector<std::wstring> segments;
         std::vector<std::wstring> outputs;
         std::wstring err;
-        PostUiMessage(hwnd_, UiStatus, job == JobCutEach ? L"正在导出（单独裁剪）…" : L"正在导出（合并）…");
+        PostUiMessage(hwnd_, UiStatus,
+                      job == JobCutEach ? TR(L"正在导出（单独裁剪）…", L"Exporting (cut each)...")
+                                       : TR(L"正在导出（合并）…", L"Exporting (merge)..."));
         ok = BuildOutputs(job, segments, outputs, err);
         if (!ok)
         {
@@ -1786,7 +1891,7 @@ void MainWindow::JobThreadMain(int job, bool detectAll, int onlyIndex)
         {
             if (job == JobCutEach)
             {
-                summary = FormatString(L"导出完成，共 %d 个文件：", (int)outputs.size());
+                summary = FormatString(TR(L"导出完成，共 %d 个文件：", L"Export finished, %d file(s):"), (int)outputs.size());
                 for (size_t i = 0; i < outputs.size(); ++i)
                     summary += L"\n  " + outputs[i];
             }
@@ -1822,7 +1927,7 @@ bool MainWindow::BuildOutputs(int job,
     std::wstring outDir = PreferredOutputDir();
     if (!EnsureDirectory(outDir))
     {
-        err = L"无法创建输出目录：" + outDir;
+        err = TR(L"无法创建输出目录：", L"cannot create the output folder: ") + outDir;
         return false;
     }
     lastOutputDir_ = outDir;
@@ -1831,7 +1936,7 @@ bool MainWindow::BuildOutputs(int job,
     DeleteDirectoryRecursive(workDir);
     if (!EnsureDirectory(workDir))
     {
-        err = L"无法创建临时目录：" + workDir;
+        err = TR(L"无法创建临时目录：", L"cannot create the temp folder: ") + workDir;
         return false;
     }
 
@@ -1842,7 +1947,7 @@ bool MainWindow::BuildOutputs(int job,
 
     for (int i = 0; i < total; ++i)
     {
-        if (cancel_.IsCancelled()) { err = L"导出已取消"; return false; }
+        if (cancel_.IsCancelled()) { err = TR(L"导出已取消", L"Export cancelled"); return false; }
 
         VideoItem& it = project_.items[i];
         PostUiMessage(hwnd_, UiProgress, L"", (int)((long long)i * 100 / (total > 0 ? total : 1)), i);
@@ -1850,12 +1955,14 @@ bool MainWindow::BuildOutputs(int job,
 
         if (it.info.duration <= 0.0)
         {
-            PostUiMessage(hwnd_, UiLog, it.name + L"：没有读取到视频信息，跳过");
+            PostUiMessage(hwnd_, UiLog, it.name + TR(L"：没有读取到视频信息，跳过",
+                                                     L": no video info, skipped"));
             continue;
         }
         if (it.selectedSegmentCount() == 0)
         {
-            PostUiMessage(hwnd_, UiLog, it.name + L"：没有选中任何分段，跳过");
+            PostUiMessage(hwnd_, UiLog, it.name + TR(L"：没有选中任何分段，跳过",
+                                                     L": nothing selected, skipped"));
             continue;
         }
 
@@ -1864,7 +1971,8 @@ bool MainWindow::BuildOutputs(int job,
         if (it.hasContiguousFullSelection())
         {
             parts.push_back(it.path);       // 整段保留：直接使用源文件
-            PostUiMessage(hwnd_, UiLog, it.name + L"：整段保留（无需裁剪）");
+            PostUiMessage(hwnd_, UiLog, it.name + TR(L"：整段保留（无需裁剪）",
+                                                     L": kept whole (nothing to cut)"));
         }
         else
         {
@@ -1889,33 +1997,36 @@ bool MainWindow::BuildOutputs(int job,
             if ((int)runs.size() != it.selectedSegmentCount())
             {
                 PostUiMessage(hwnd_, UiLog,
-                              FormatString(L"  · %d 个连续片段合并为 %d 次裁切",
+                              FormatString(TR(L"  · %d 个连续片段合并为 %d 次裁切",
+                           L"  - %d adjacent runs merged into %d cuts"),
                                            it.selectedSegmentCount(), (int)runs.size()));
             }
             else
             {
                 PostUiMessage(hwnd_, UiLog,
-                              FormatString(L"  · %d 次裁切", (int)runs.size()));
+                              FormatString(TR(L"  · %d 次裁切", L"  - %d cut(s)"), (int)runs.size()));
             }
 
             int idx = 0;
             for (size_t k = 0; k < runs.size(); ++k)
             {
-                if (cancel_.IsCancelled()) { err = L"导出已取消"; return false; }
+                if (cancel_.IsCancelled()) { err = TR(L"导出已取消", L"Export cancelled"); return false; }
                 const KeepRun& s = runs[k];
                 ++idx;
                 ++seq;
 
                 std::wstring seg = PathCombine(workDir, FormatString(L"seg_%04d.mp4", seq));
                 PostUiMessage(hwnd_, UiStatus,
-                              FormatString(L"[%d/%d] %s 第 %d/%d 段 %s → %s",
+                              FormatString(TR(L"[%d/%d] %s 第 %d/%d 段 %s → %s",
+                                         L"[%d/%d] %s part %d/%d %s -> %s"),
                                            i + 1, total, it.name.c_str(), idx, (int)runs.size(),
                                            FormatClock(s.t0).c_str(), FormatClock(s.t1).c_str()));
 
                 std::string e;
                 if (!ffmpeg_.Trim(it.path, s.t0, s.t1, seg, enc, e))
                 {
-                    err = FormatString(L"裁剪失败：%s（%s - %s）\n%s",
+                    err = FormatString(TR(L"裁剪失败：%s（%s - %s）\n%s",
+                               L"Trim failed: %s (%s - %s)\n%s"),
                                        it.name.c_str(), FormatClock(s.t0).c_str(),
                                        FormatClock(s.t1).c_str(), Utf8ToWide(e).c_str());
                     DeleteDirectoryRecursive(workDir);
@@ -1961,7 +2072,7 @@ bool MainWindow::BuildOutputs(int job,
 
             if (!okOne)
             {
-                err = L"输出失败：" + out + L"\n" + Utf8ToWide(e);
+                err = TR(L"输出失败：", L"Write failed: ") + out + L"\n" + Utf8ToWide(e);
                 DeleteDirectoryRecursive(workDir);
                 return false;
             }
@@ -1980,7 +2091,8 @@ bool MainWindow::BuildOutputs(int job,
     {
         if (mergeParts.empty())
         {
-            err = L"没有可合并的内容（没有选中任何分段）。";
+            err = TR(L"没有可合并的内容（没有选中任何分段）。",
+             L"Nothing to merge (no segment is selected).");
             DeleteDirectoryRecursive(workDir);
             return false;
         }
@@ -2008,14 +2120,14 @@ bool MainWindow::BuildOutputs(int job,
             std::vector<std::wstring> norm;
             for (size_t i = 0; i < concatInputs.size(); ++i)
             {
-                if (cancel_.IsCancelled()) { err = L"导出已取消"; DeleteDirectoryRecursive(workDir); return false; }
+                if (cancel_.IsCancelled()) { err = TR(L"导出已取消", L"Export cancelled"); DeleteDirectoryRecursive(workDir); return false; }
                 PostUiMessage(hwnd_, UiStatus,
-                              FormatString(L"统一格式 %d/%d …", (int)i + 1, (int)concatInputs.size()));
+                              FormatString(TR(L"统一格式 %d/%d …", L"Normalising %d/%d ..."), (int)i + 1, (int)concatInputs.size()));
                 std::wstring n = PathCombine(workDir, FormatString(L"norm_%04d.mp4", (int)i));
                 std::string e;
                 if (!ffmpeg_.Normalize(concatInputs[i], n, w, h, fps, true, enc, e))
                 {
-                    err = L"统一格式失败：\n" + Utf8ToWide(e);
+                    err = TR(L"统一格式失败：\n", L"Normalising failed:\n") + Utf8ToWide(e);
                     DeleteDirectoryRecursive(workDir);
                     return false;
                 }
@@ -2049,11 +2161,11 @@ bool MainWindow::BuildOutputs(int job,
         std::wstring out = UniquePath(PathCombine(outDir, name));
         std::wstring listFile = PathCombine(workDir, L"concat_list.txt");
 
-        PostUiMessage(hwnd_, UiStatus, FormatString(L"拼接 %d 段 …", (int)concatInputs.size()));
+        PostUiMessage(hwnd_, UiStatus, FormatString(TR(L"拼接 %d 段 …", L"Concatenating %d part(s) ..."), (int)concatInputs.size()));
         std::string e;
         if (!ffmpeg_.Concat(concatInputs, listFile, out, concatEnc, e))
         {
-            err = L"合并失败：\n" + Utf8ToWide(e);
+            err = TR(L"合并失败：\n", L"Merge failed:\n") + Utf8ToWide(e);
             DeleteDirectoryRecursive(workDir);
             return false;
         }
@@ -2066,7 +2178,8 @@ bool MainWindow::BuildOutputs(int job,
     DeleteDirectoryRecursive(workDir);
     if (produced == 0)
     {
-        err = L"没有任何视频被导出（请检查选中情况）。";
+        err = TR(L"没有任何视频被导出（请检查选中情况）。",
+             L"No video was exported (check the selection).");
         return false;
     }
     return true;
@@ -2106,7 +2219,7 @@ bool MainWindow::AskForOutputDir()
     BROWSEINFOW bi;
     ::ZeroMemory(&bi, sizeof(bi));
     bi.hwndOwner = hwnd_;
-    bi.lpszTitle = L"选择导出目录";
+    bi.lpszTitle = TR(L"选择导出目录", L"Pick the output folder");
     bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_USENEWUI;
     LPITEMIDLIST pidl = ::SHBrowseForFolderW(&bi);
     if (!pidl) return false;
@@ -2123,22 +2236,90 @@ bool MainWindow::AskForOutputDir()
 
 void MainWindow::ShowSettingsDialog()
 {
+    const AppLang oldLang    = settings_.lang;
+    const bool    oldThumbs  = settings_.makeThumbs;
     if (ShowSettingsDialogModal(hwnd_, settings_, ffmpeg_))
     {
         settingsDirty_ = true;
         SaveSettings(settings_);
         timeline_.SetThumbHeight(settings_.thumbHeight);
+        timeline_.SetThumbsEnabled(settings_.makeThumbs);
+        if (settings_.lang != oldLang)
+        {
+            // 语言变了：立刻重建所有静态文字，不要求重启
+            Loc::Apply(settings_.lang);
+            ApplyLanguage();
+            AppendLog(FormatString(L"界面语言：%s", Loc::Describe(settings_.lang).c_str()));
+        }
+        if (settings_.makeThumbs != oldThumbs)
+        {
+            AppendLog(settings_.makeThumbs
+                          ? TR(L"已开启缩略图生成", L"Thumbnail generation enabled")
+                          : TR(L"已关闭缩略图生成（只检测黑屏）",
+                               L"Thumbnail generation disabled (black detection only)"));
+        }
         UpdateTitles();
         UpdateButtonStates();
-        AppendLog(L"设置已保存");
+        AppendLog(TR(L"设置已保存", L"Settings saved"));
     }
+}
+
+// 语言切换后把菜单、工具栏按钮、列表表头、状态栏、帮助行全部重新写一遍。
+// 菜单必须整个重建：菜单项文字是创建时定下的，改文字只能重建。
+void MainWindow::ApplyLanguage()
+{
+    ::SetWindowTextW(hwnd_,
+                      TR(L"FastVideoCut - 黑屏自动剪辑工具 (ffmpeg 无损剪切)",
+                         L"FastVideoCut - black frame cutter (ffmpeg lossless trim)"));
+
+    HMENU old = ::GetMenu(hwnd_);
+    BuildMenu();
+    HMENU bar = ::GetMenu(hwnd_);
+    if (bar) ::SetMenu(hwnd_, bar);
+    if (old) ::DestroyMenu(old);
+
+    const BtnDef* btns = ToolbarButtons(btnDefs_);
+    for (int i = 0; i < buttonCount_; ++i)
+        ::SetWindowTextW(buttons_[i], btns[i].text);
+
+    // 列表表头
+    struct ColDef { const wchar_t* text; int width; int fmt; };
+    const ColDef cols[] =
+    {
+        { L"#",                 36,  LVCFMT_RIGHT  },
+        { TR(L"文件", L"File"),           250, LVCFMT_LEFT   },
+        { TR(L"状态", L"Status"),          96,  LVCFMT_LEFT   },
+        { TR(L"时长", L"Length"),          80,  LVCFMT_RIGHT  },
+        { TR(L"分辨率", L"Resolution"),    86,  LVCFMT_LEFT   },
+        { TR(L"规格", L"Format"),          96,  LVCFMT_LEFT   },
+        { TR(L"黑屏段", L"Black"),         60,  LVCFMT_RIGHT  },
+        { TR(L"黑屏时长", L"Black len"),   80,  LVCFMT_RIGHT  },
+        { TR(L"起始时间", L"Start"),      104, LVCFMT_RIGHT  },
+        { TR(L"结束时间", L"End"),        104, LVCFMT_RIGHT  },
+        { TR(L"保留时长", L"Kept len"),    80,  LVCFMT_RIGHT  },
+        { TR(L"已选段", L"Segments"),      64,  LVCFMT_RIGHT  },
+        { TR(L"大小", L"Size"),            82,  LVCFMT_RIGHT  }
+    };
+    for (int i = 0; i < (int)(sizeof(cols) / sizeof(cols[0])); ++i)
+    {
+        LVCOLUMNW col;
+        ::ZeroMemory(&col, sizeof(col));
+        col.mask = LVCF_TEXT;
+        col.pszText = (LPWSTR)cols[i].text;
+        ::SendMessageW(list_, LVM_SETCOLUMNW, (WPARAM)i, (LPARAM)&col);
+    }
+
+    ApplyListMode(false);      // 顺带刷新“列表/视频”按钮的文字
+    RebuildList();             // 状态/摘要等文字也依赖语言
+    timeline_.Refresh();
+    preview_.SetLanguage();    // 预览窗的按钮与占位文字
 }
 
 void MainWindow::ShowInfoDialog()
 {
     ::MessageBoxW(hwnd_,
-        L"FastVideoCut 使用说明\n"
-        L"─────────────────────────────\n"
+        TR(L"FastVideoCut 使用说明\n"
+           L"─────────────────────────────\n"
         L"1) 添加视频：点“添加视频”或把文件/文件夹直接拖进窗口。每个视频占一行。\n\n"
         L"2) 自动分析：点“自动分析”（F6）。程序用 ffmpeg 的 blackdetect 滤镜找出每一段黑屏的\n"
         L"   起止时间与长度，显示在“时长/黑屏段/黑屏时长”列，并直接画在帧流上\n"
@@ -2174,11 +2355,64 @@ void MainWindow::ShowInfoDialog()
         L"      · Shift+滚轮 / 中键拖动 = 横向平移，F5 = 适应窗口\n\n"
         L"6) ffmpeg 位置：优先使用程序目录或上级目录里带 ffmpeg 的 bin 目录，\n"
         L"   其次 PATH；也可以在“设置”里手动指定。\n\n"
+        L"7) 界面与缩略图：\n"
+        L"      · “设置”里可以切换界面语言（简体中文 / English）；第一次启动会\n"
+        L"        按系统语言自动选择，之后按你的选择固定。\n"
+        L"      · “生成视频流缩略图”默认不勾选：只做黑屏检测，不抽帧拼图，\n"
+        L"        长视频列表会明显更快。需要看画面时再打开。\n\n"
         L"开源授权：FastVideoCut 基于 GNU GPL v3.0 或更高版本发布，\n"
         L"Copyright (C) 2026 dzdhome。可自由使用与修改；对外分发时\n"
         L"必须附带许可证全文并提供完整源码（https://github.com/dzdhome/FastVideoCut）。\n"
         L"本程序按“不附带任何担保”提供。ffmpeg 为独立进程调用，未静态链接、不随本程序分发。",
-        L"FastVideoCut 使用说明", MB_ICONINFORMATION);
+
+        L"FastVideoCut - usage guide\n"
+        L"-----------------------------\n"
+        L"1) Add videos: click \"Add\" or drag files / folders onto the window.\n\n"
+        L"2) Analyse (F6): ffmpeg's blackdetect filter finds every black range; it\n"
+        L"   is listed in the Length / Black / Black len columns and drawn on the\n"
+        L"   strip (red hatching = black). Black frames only mark the boundary\n"
+        L"   between intro/outro and body - they are not the content you want to\n"
+        L"   delete. Each row also shows the picture format, e.g. \"HDR10 - 10bit\".\n"
+        L"   - By default only videos that were never analysed are re-checked\n"
+        L"   - While it runs, \"Analyse\" becomes \"Stop\" - click it again to stop\n"
+        L"   - To redo one video: select the row, then Ctrl+F6 / right-click / double-click\n"
+        L"   - Shift+F6 re-checks everything\n\n"
+        L"   Scan window: long videos only decode the first 180 s and the last 180 s.\n"
+        L"   Both values live in Settings. 0 = that side is not scanned at all, a\n"
+        L"   negative number = no limit (whole file). Videos shorter than head+tail\n"
+        L"   are scanned completely.\n\n"
+        L"3) Choose what to keep (click the strip: left = start, right = end):\n"
+        L"      - Left click a segment = keep start, right click = keep end\n"
+        L"      - Everything between the two ends is kept, the rest is cut\n"
+        L"      - Ctrl+click = toggle one segment, double click = keep only it\n"
+        L"      - Clicking a segment also previews it on the right\n"
+        L"      - Ctrl+B (Select menu) keeps the body in one go\n"
+        L"      - Grey = will be cut away\n\n"
+        L"4) Export:\n"
+        L"      - \"Export each video\": cuts away every unselected segment.\n"
+        L"      - \"Merge into one file\": concatenates all videos in list order.\n"
+        L"   Both use ffmpeg stream copy (-c copy): lossless and fast. If the\n"
+        L"   sources disagree on codec parameters, tick \"Re-encode\" in Settings.\n\n"
+        L"5) View:\n"
+        L"      - The toolbar \"List\" button (Ctrl+L) switches the left pane between\n"
+        L"        the file list and the video strip\n"
+        L"      - Wheel = scroll videos, Ctrl+wheel = zoom\n"
+        L"      - Shift+wheel or middle drag = pan, F5 = fit to window\n\n"
+        L"6) ffmpeg: the bin folder next to the exe is preferred, then PATH; you\n"
+        L"   can also set it by hand in Settings.\n\n"
+        L"7) Language and thumbnails:\n"
+        L"      - The interface language (Simplified Chinese / English) is in\n"
+        L"        Settings. The first launch picks it from the system locale.\n"
+        L"      - \"Build timeline thumbnails\" is OFF by default: only black\n"
+        L"        detection runs, with no frame sampling, which is much faster on\n"
+        L"        long lists. Turn it on to see the pictures.\n\n"
+        L"Licence: FastVideoCut is released under the GNU GPL v3.0 or later,\n"
+        L"Copyright (C) 2026 dzdhome. Free to use and modify; when you redistribute\n"
+        L"it you must ship the full licence and the complete source\n"
+        L"(https://github.com/dzdhome/FastVideoCut). Provided \"as is\". ffmpeg is\n"
+        L"invoked as a separate process, is not linked statically and is not\n"
+        L"distributed with this program."),
+        TR(L"FastVideoCut 使用说明", L"FastVideoCut usage guide"), MB_ICONINFORMATION);
 }
 
 // __FVC_MAINWND_CHUNK_END__

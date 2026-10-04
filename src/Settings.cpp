@@ -123,6 +123,11 @@ bool LoadSettings(AppSettings& s)
 
     s.thumbHeight    = IniGetInt(f, L"ui", L"thumbHeight", s.thumbHeight);
     s.showFileList   = IniGetBool(f, L"ui", L"showFileList", s.showFileList);
+    s.makeThumbs     = IniGetBool(f, L"ui", L"makeThumbs", s.makeThumbs);
+    // 语言存的是数字；越界就退回“跟随系统”
+    int lang = IniGetInt(f, L"ui", L"lang", (int)s.lang);
+    if (lang < 0 || lang > 2) lang = 0;
+    s.lang           = (AppLang)lang;
 
     s.reencodeExport      = IniGetBool(f, L"export", L"reencode", s.reencodeExport);
     s.mergeReencode       = IniGetBool(f, L"export", L"mergeReencode", s.mergeReencode);
@@ -178,6 +183,8 @@ bool SaveSettings(const AppSettings& s)
 
     IniSetInt(f, L"ui", L"thumbHeight", tmp.thumbHeight);
     IniSetBool(f, L"ui", L"showFileList", tmp.showFileList);
+    IniSetBool(f, L"ui", L"makeThumbs", tmp.makeThumbs);
+    IniSetInt(f, L"ui", L"lang", (int)tmp.lang);
     IniSetString(f, L"ui", L"lastAddDir", tmp.lastAddDir);
     return true;
 }

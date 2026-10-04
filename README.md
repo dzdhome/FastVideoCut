@@ -44,7 +44,17 @@ Win32 / C++17 桌面工具：用 `ffmpeg` 做**黑屏自动检测**、**帧流�
   两段编号里的数字不会被当成公共前缀（`第1集` + `第2集` → `第1集-2集.mp4`）。
   重名时自动追加 `_1`、`_2`
 - **缩略图时间线** — `fps` 抽帧 + `tile` 拼图生成马赛克，磁盘缓存，块式按需展开
-- **纯 Win32** — 无 MFC / Qt / WTL，设置对话框由内存 `DLGTEMPLATE` 构建，无 `.rc` 对话框资源
+- **缩略图可关（默认关）** — 设置里的「生成视频流缩略图」默认**不勾选**：黑屏检测本身
+  不需要画面，此时只跑 `blackdetect`，不抽帧、不拼图，视频多或长视频时明显更快。
+  勾上以后帧流会即时开始生成马赛克；关掉时「清理缩略图」按钮与菜单项自动置灰
+- **界面语言：简体中文 / English** — 设置 →「界面语言」，默认「跟随系统」：
+  第一次启动按系统区域设置自动选中文（`zh-*`）或英文，之后按你的选择固定。
+  切换后**立即生效、不用重启**（菜单、工具栏、列表表头、状态栏、帮助行、
+  时间线标签、预览窗、使用说明全部跟着换）。Windows 系统对话框
+  （`是/否` 这类按钮）由系统按**系统语言**决定，不随本程序语言变化
+- **清空列表** — 工具栏第 3 个按钮（也可走菜单「文件 → 清空列表」），
+  清空前会二次确认；只清列表，不动磁盘上的文件，清完按钮状态同步置灰
+- **纯 Win32** — 无 MFC / Qt / WTL，设置对话框用 `src/settings.rc` 资源模板
 
 ## 构建
 
@@ -129,12 +139,26 @@ $env:FASTVIDEOCUT_FFMPEG='C:\ffmpeg\bin'
 - 裁切点落在非关键帧时，播放器在该点后最多一个 GOP 内可能出现短暂花屏；如无法接受请在设置里改用“重编码导出”。
 - 所有 `ffmpeg` 调用都走 `CreateProcess` + 管道捕获（`src/Process.cpp`），可随时取消（`CancelToken`）。
 - 编码统一 UTF-8：宽字符 ↔ UTF-8 转换见 `src/Utf.cpp`，宽字符格式化用 `FormatString`（`%s` = `wchar_t*`，MSVC / MinGW 一致）。
+- **多语言怎么做的**（`src/Loc.h`）：不引第三方 i18n 框架，只有一个宏
+  `TR(zh, en)`，两种文字并排写在调用处，运行期二选一。好处是上下文永远挨着、
+  不会漏翻；代价是两种文本都编进二进制（几十 KB）。
+  · 语言在 `MainWindow::Create` 里、建任何窗口**之前**就定下来（`Loc::Apply`），
+    因为控件文字、菜单项都是创建时取一次 `TR()` 的
+  · 工具栏按钮表 `ToolbarButtons()` 既不能做全局数组（`TR()` 不是常量表达式，
+    不能用于静态初始化），也**不能缓存成 `static`** —— 界面语言会中途改，
+    缓存会把旧语言留住（这个坑踩过一次）
+  · 设置对话框模板里写死中文，靠 `ApplyTexts()` 用 `SetDlgItemText` 整体改写，
+    所以 `settings.rc` 里每个 `LTEXT` 都必须有 ID
+  · `CBS_DROPDOWNLIST` 上 `SetWindowText` 不会改当前项，必须 `CB_SETCURSEL`
+  · 运行中换语言走 `MainWindow::ApplyLanguage()`：菜单要**整个重建**
+    （菜单项文字改不了，只能重建），其余控件重写文字后刷新列表与时间线
 
 ## 目录
 
 ```
-src/        主程序（Utf / Process / Ffmpeg / Project / Settings / Timeline /
-            MainWindow / SettingsDialog / main + app.rc + resource.h）
+src/        主程序（Utf / Process / Ffmpeg / Project / Settings / Loc / Timeline /
+            MainWindow / SettingsDialog / Preview / main + app.rc + settings.rc +
+            resource.h）
 tests/      SelfTest 控制台自测
 _test/      构建产物、obj、测试媒体与导出样例（不入库）
 ```

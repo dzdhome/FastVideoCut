@@ -21,6 +21,7 @@
 // Project.cpp - document model implementation
 // ---------------------------------------------------------------------------
 #include "Project.h"
+#include "Loc.h"
 
 #include <algorithm>
 #include <cmath>
@@ -135,11 +136,12 @@ std::wstring VideoItem::statusText() const
 {
     switch (status)
     {
-    case ItemStatus::Pending:   return L"待检测";
-    case ItemStatus::Probing:   return L"读取信息";
-    case ItemStatus::Detecting: return FormatString(L"检测中 %d%%", (int)(detectProgress * 100.0 + 0.5));
-    case ItemStatus::Ready:     return L"已就绪";
-    case ItemStatus::Error:     return L"出错";
+    case ItemStatus::Pending:   return TR(L"待检测", L"Pending");
+    case ItemStatus::Probing:   return TR(L"读取信息", L"Probing");
+    case ItemStatus::Detecting: return FormatString(TR(L"检测中 %d%%", L"Analysing %d%%"),
+                                                    (int)(detectProgress * 100.0 + 0.5));
+    case ItemStatus::Ready:     return TR(L"已就绪", L"Ready");
+    case ItemStatus::Error:     return TR(L"出错", L"Error");
     }
     return L"";
 }
@@ -148,7 +150,8 @@ std::wstring VideoItem::summaryText() const
 {
     if (status == ItemStatus::Error) return message;
     if (info.duration <= 0.0) return L"-";
-    return FormatString(L"%s | %dx%d | %.3gfps | 黑屏%d段",
+    return FormatString(TR(L"%s | %dx%d | %.3gfps | 黑屏%d段",
+                            L"%s | %dx%d | %.3gfps | %d black"),
                         FormatClock(info.duration).c_str(),
                         info.width, info.height, info.fps, blackCount());
 }

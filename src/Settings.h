@@ -23,6 +23,7 @@
 #pragma once
 
 #include "Utf.h"
+#include "Loc.h"
 
 #include <string>
 
@@ -47,6 +48,13 @@ struct AppSettings
     // ui state
     // false = 左侧只显示视频列表（帧流），文件列表框隐藏（工具栏“列表”按钮切换）
     bool   showFileList          = false;
+
+    // 界面语言。Auto = 跟随系统（首次启动按区域设置自动选中文或英文）
+    AppLang lang                 = AppLang::Auto;
+
+    // 是否生成视频流缩略图。默认关闭：黑屏检测本身不需要缩略图，关掉可以
+    // 少跑一遍 ffmpeg 抽帧 + 拼图，长视频列表明显更快。
+    bool   makeThumbs            = false;
 
     // export
     bool   reencodeExport        = false;    // false => lossless stream copy

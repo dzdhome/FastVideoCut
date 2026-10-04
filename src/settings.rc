@@ -6,45 +6,49 @@
 #include <windows.h>
 #include "resource.h"
 
-IDD_SETTINGS DIALOG 0, 0, 340, 254
+IDD_SETTINGS DIALOG 0, 0, 340, 272
 STYLE DS_SETFONT|DS_MODALFRAME|DS_CENTER|WS_POPUP|WS_CAPTION|WS_SYSMENU
 CAPTION "FastVideoCut 设置"
 FONT 9, "Microsoft YaHei UI"
 BEGIN
-    LTEXT      "ffmpeg 目录", -1, 8, 9, 58, 10
+    LTEXT      "ffmpeg 目录", IDC_SET_LB_FFDIR, 8, 9, 58, 10
     EDITTEXT   IDC_SET_FFDIR, 68, 8, 196, 12, ES_AUTOHSCROLL
     PUSHBUTTON "浏览...", IDC_SET_FFBROWSE, 270, 7, 60, 15
 
-    LTEXT      "输出目录", -1, 8, 25, 58, 10
+    LTEXT      "输出目录", IDC_SET_LB_OUTDIR, 8, 25, 58, 10
     EDITTEXT   IDC_SET_OUTDIR, 68, 24, 196, 12, ES_AUTOHSCROLL
     PUSHBUTTON "浏览...", IDC_SET_OUTBROWSE, 270, 23, 60, 15
 
+    LTEXT      "---- 界面 ----", IDC_SET_LB_UI, 8, 46, 200, 10
+    LTEXT      "界面语言", IDC_SET_LB_LANG, 8, 60, 58, 10
+    COMBOBOX   IDC_SET_LANG, 68, 59, 130, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    AUTOCHECKBOX "生成视频流缩略图（不勾选时只检测黑屏，不抽帧，更快）", IDC_SET_THUMBS, 8, 76, 300, 10
 
-    LTEXT      "---- 黑屏检测 blackdetect ----", -1, 8, 62, 200, 10
-    LTEXT      "最短时长(秒)", -1, 8, 76, 80, 10
-    EDITTEXT   IDC_SET_MINDUR, 92, 75, 54, 12, ES_AUTOHSCROLL
-    LTEXT      "像素阈值 pix_th", -1, 156, 76, 84, 10
-    EDITTEXT   IDC_SET_PIXTH, 246, 75, 54, 12, ES_AUTOHSCROLL
-    LTEXT      "比例阈值 pic_th", -1, 8, 92, 84, 10
-    EDITTEXT   IDC_SET_PICTH, 92, 91, 54, 12, ES_AUTOHSCROLL
-    LTEXT      "缩略图高(像素)", -1, 156, 92, 90, 10
-    EDITTEXT   IDC_SET_THUMBH, 246, 91, 54, 12, ES_AUTOHSCROLL
-    LTEXT      "只扫片头(秒)", -1, 8, 108, 76, 10
-    EDITTEXT   IDC_SET_HEADSCAN, 88, 107, 40, 12, ES_AUTOHSCROLL
-    LTEXT      "只扫片尾(秒)", -1, 156, 108, 76, 10
-    EDITTEXT   IDC_SET_TAILSCAN, 236, 107, 40, 12, ES_AUTOHSCROLL
-    LTEXT      "0 = 该侧完全不扫，负数 = 该侧不限制（整段扫描）", -1, 8, 124, 300, 10
+    LTEXT      "---- 黑屏检测 blackdetect ----", IDC_SET_LB_DETECT, 8, 94, 200, 10
+    LTEXT      "最短时长(秒)", IDC_SET_LB_MINDUR, 8, 108, 80, 10
+    EDITTEXT   IDC_SET_MINDUR, 92, 107, 54, 12, ES_AUTOHSCROLL
+    LTEXT      "像素阈值 pix_th", IDC_SET_LB_PIXTH, 156, 108, 84, 10
+    EDITTEXT   IDC_SET_PIXTH, 246, 107, 54, 12, ES_AUTOHSCROLL
+    LTEXT      "比例阈值 pic_th", IDC_SET_LB_PICTH, 8, 124, 84, 10
+    EDITTEXT   IDC_SET_PICTH, 92, 123, 54, 12, ES_AUTOHSCROLL
+    LTEXT      "缩略图高(像素)", IDC_SET_LB_THUMBH, 156, 124, 90, 10
+    EDITTEXT   IDC_SET_THUMBH, 246, 123, 54, 12, ES_AUTOHSCROLL
+    LTEXT      "只扫片头(秒)", IDC_SET_LB_HEADSCAN, 8, 140, 76, 10
+    EDITTEXT   IDC_SET_HEADSCAN, 88, 139, 40, 12, ES_AUTOHSCROLL
+    LTEXT      "只扫片尾(秒)", IDC_SET_LB_TAILSCAN, 156, 140, 76, 10
+    EDITTEXT   IDC_SET_TAILSCAN, 236, 139, 40, 12, ES_AUTOHSCROLL
+    LTEXT      "0 = 该侧完全不扫，负数 = 该侧不限制（整段扫描）", IDC_SET_LB_SCANHINT, 8, 156, 300, 10
 
-    LTEXT      "---- 导出参数 ----", -1, 8, 140, 200, 10
-    AUTOCHECKBOX "导出时重新编码（默认关闭 = ffmpeg 无损流复制）", IDC_SET_REENC, 8, 154, 260, 10
-    LTEXT      "CRF", -1, 8, 170, 30, 10
-    EDITTEXT   IDC_SET_CRF, 40, 169, 40, 12, ES_AUTOHSCROLL
-    LTEXT      "preset", -1, 92, 170, 40, 10
-    EDITTEXT   IDC_SET_PRESET, 134, 169, 80, 12, ES_AUTOHSCROLL
-    AUTOCHECKBOX "mp4 输出加 +faststart（网络快启，略微增加耗时）", IDC_SET_FASTSTART, 8, 186, 260, 10
-    AUTOCHECKBOX "导出完成后询问是否打开输出文件夹", IDC_SET_CONFIRM, 8, 202, 260, 10
+    LTEXT      "---- 导出参数 ----", IDC_SET_LB_EXPORT, 8, 172, 200, 10
+    AUTOCHECKBOX "导出时重新编码（默认关闭 = ffmpeg 无损流复制）", IDC_SET_REENC, 8, 186, 280, 10
+    LTEXT      "CRF", IDC_SET_LB_CRF, 8, 202, 30, 10
+    EDITTEXT   IDC_SET_CRF, 40, 201, 40, 12, ES_AUTOHSCROLL
+    LTEXT      "preset", IDC_SET_LB_PRESET, 92, 202, 40, 10
+    EDITTEXT   IDC_SET_PRESET, 134, 201, 80, 12, ES_AUTOHSCROLL
+    AUTOCHECKBOX "mp4 输出加 +faststart（网络快启，略微增加耗时）", IDC_SET_FASTSTART, 8, 218, 280, 10
+    AUTOCHECKBOX "导出完成后询问是否打开输出文件夹", IDC_SET_CONFIRM, 8, 234, 280, 10
 
-    PUSHBUTTON "恢复默认", IDC_SET_RESET, 8, 220, 62, 15
-    DEFPUSHBUTTON "确定", IDOK, 208, 220, 60, 15
-    PUSHBUTTON "取消", IDCANCEL, 272, 220, 60, 15
+    PUSHBUTTON "恢复默认", IDC_SET_RESET, 8, 252, 62, 15
+    DEFPUSHBUTTON "确定", IDOK, 208, 252, 60, 15
+    PUSHBUTTON "取消", IDCANCEL, 272, 252, 60, 15
 END

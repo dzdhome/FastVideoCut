@@ -60,8 +60,9 @@ public:
               const std::wstring& label);
 
     void TogglePause();
-    void Stop();         // user stop / job start: logs "预览停止"
+    void Stop();         // user stop / job start: logs "preview stopped"
     void Shutdown();     // silent teardown (window is going away)
+    void SetLanguage();  // 界面语言切换后重写按钮文字并重绘
 
     bool playing() const { return playing_.load(); }
 

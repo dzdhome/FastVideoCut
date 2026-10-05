@@ -2,6 +2,8 @@
 // ScrollBarView.cpp - self-painted scroll bar
 //
 // Flat light track, plain grey thumb, thin frame - the look the log view had.
+// No arrow buttons: the thumb darkens on hover and darker still while it is
+// being dragged, which is a lighter hint than a button that is not there.
 // ---------------------------------------------------------------------------
 #include "ScrollBarView.h"
 
@@ -11,10 +13,15 @@
 
 namespace
 {
-    const COLORREF kTrack  = RGB(240, 240, 240);
-    const COLORREF kThumb  = RGB(160, 160, 160);
-    const int      kMinThumb = 18;    // never so small it is impossible to hit
-    const int      kFrame    = 1;
+    const COLORREF kTrack      = RGB(240, 240, 240);
+    const COLORREF kThumb      = RGB(160, 160, 160);
+    const COLORREF kThumbHover = RGB(120, 120, 120);
+    const COLORREF kThumbDown  = RGB(90, 90, 90);
+
+    const int kMinTrack    = 16;     // below this the bar is not worth showing
+    const int kMinThumb    = 18;     // never so small it is impossible to grab
+    const int kFrame       = 1;
+    const int kThumbInset  = 2;      // gap between the thumb and the frame
 }
 
 bool ScrollBarView::Create(HWND owner, int id, HINSTANCE inst, bool vertical)
@@ -47,9 +54,7 @@ void ScrollBarView::SetRange(int minV, int maxV, int page)
 
 void ScrollBarView::SetValue(int v)
 {
-    const int top  = min_;
-    const int last = max_ - page_ + 1;
-    value_ = std::min(std::max(v, top), std::max(top, last));
+    value_ = Clamped(v);
     Refresh();
 }
 
@@ -59,119 +64,161 @@ void ScrollBarView::Refresh()
 }
 
 // ---- geometry -------------------------------------------------------------
-int ScrollBarView::TrackLength() const
+int ScrollBarView::Len() const
 {
     if (!bar_) return 0;
     RECT rc;
     ::GetClientRect(bar_, &rc);
-    return (vert_ ? (rc.bottom - rc.top) : (rc.right - rc.left)) - 2 * kFrame;
+    return vert_ ? (rc.bottom - rc.top) : (rc.right - rc.left);
+}
+
+int ScrollBarView::TrackStart() const { return kFrame; }
+
+int ScrollBarView::TrackLength() const
+{
+    const int t = Len() - 2 * TrackStart();
+    return t > 0 ? t : 0;
 }
 
 int ScrollBarView::ThumbLength() const
 {
     const int track = TrackLength();
     if (track <= 0) return 0;
-    const int range = max_ - min_ + 1;
-    if (range <= 0 || page_ >= range) return 0;     // nothing to scroll
 
-    int thumb = track * page_ / range;
-    thumb = std::max(kMinThumb, thumb);
-    return std::min(thumb, track);
+    const int range = max_ - min_ - page_ + 1;
+    if (range <= 0) return track;       // nothing to scroll: the thumb fills it
+
+    // Scale the thumb with the ratio, but never below kMinThumb - a stubby
+    // thumb the pointer keeps missing is worse than a slightly oversized one.
+    return std::min(track, std::max(kMinThumb, (page_ * track) / range));
 }
 
 int ScrollBarView::ThumbOffset() const
 {
     const int track = TrackLength();
     const int thumb = ThumbLength();
-    if (track <= 0 || thumb <= 0 || thumb >= track) return 0;
+    if (track <= thumb) return 0;
 
-    const int scrollable = (max_ - min_ + 1) - page_;
-    if (scrollable <= 0) return 0;
-    return (track - thumb) * (value_ - min_) / scrollable;
+    const int range = max_ - min_ - page_ + 1;
+    if (range <= 0) return 0;
+
+    return ((value_ - min_) * (track - thumb)) / range;
 }
 
 int ScrollBarView::ValueAtPixel(int along) const
 {
     const int track = TrackLength();
     const int thumb = ThumbLength();
-    if (track <= 0 || thumb <= 0 || thumb >= track) return min_;
+    if (track <= thumb) return min_;
 
-    const int scrollable = (max_ - min_ + 1) - page_;
-    if (scrollable <= 0) return min_;
+    const int range = max_ - min_ - page_ + 1;
+    if (range <= 0) return min_;
 
-    int delta = along - ThumbOffset();
-    delta = std::min(std::max(delta, 0), track - thumb);
-    return min_ + delta * scrollable / (track - thumb);
+    int v = min_ + ((along - TrackStart() - thumb / 2) * range) / (track - thumb);
+    return Clamped(v);
 }
 
 bool ScrollBarView::OnThumb(int along) const
 {
-    const int thumb = ThumbLength();
-    if (thumb <= 0) return false;
     const int off = ThumbOffset();
-    return along >= off && along < off + thumb;
+    const int len = ThumbLength();
+    return len > 0 && along >= off + TrackStart() && along < off + len + TrackStart();
 }
 
-void ScrollBarView::Notify(int code, int value)
+int ScrollBarView::Clamped(int v) const
 {
-    if (!owner_) return;
-    ::SendMessageW(owner_, vert_ ? WM_VSCROLL : WM_HSCROLL, MAKEWPARAM(code, value), 0);
+    if (v < min_) v = min_;
+    if (v > max_ - page_ + 1) v = max_ - page_ + 1;
+    if (v < 0) v = 0;
+    return v;
 }
 
 // ---- input ----------------------------------------------------------------
 void ScrollBarView::OnLButtonDown(int x, int y)
 {
     if (!HasRange()) return;
+
     const int along = vert_ ? y : x;
 
     if (OnThumb(along))
     {
         dragging_ = true;
-        grabOff_  = along - ThumbOffset();
+        grabOff_  = along - (ThumbOffset() + TrackStart());
         ::SetCapture(bar_);
+        SetHover(true);
     }
     else
     {
-        // click on the track: page towards the click
-        const int before = value_;
-        value_ = std::min(std::max(ValueAtPixel(along), min_),
-                          std::max(min_, max_ - page_ + 1));
-        if (value_ != before) Notify(vert_ ? SB_PAGEUP : SB_PAGELEFT, value_);
-    }
-    Refresh();
-}
+        // Page towards the click. Before the thumb means "back", after it means
+        // "forward" - the track is not a pair of fixed buttons, so the side
+        // that was clicked is the side that decides.
+        const bool back = along < ThumbOffset() + TrackStart() + ThumbLength() / 2;
+        const int  pos  = Clamped(value_ + (back ? -page_ : page_));
+        if (pos == value_) return;
 
-void ScrollBarView::OnMouseMove(int x, int y, bool leftDown)
-{
-    if (!dragging_ || !leftDown) return;
-    const int v = ValueAtPixel((vert_ ? y : x) - grabOff_);
-    if (v != value_)
-    {
-        value_ = v;
-        Notify(SB_THUMBTRACK, value_);
+        value_ = pos;
+        Notify(vert_ ? (back ? SB_PAGEUP : SB_PAGEDOWN)
+                     : (back ? SB_PAGELEFT : SB_PAGERIGHT), value_);
         Refresh();
     }
 }
 
-void ScrollBarView::OnLButtonUp()
+void ScrollBarView::OnMouseMove(int x, int y, bool leftDown)
 {
-    if (dragging_)
+    const int along = vert_ ? y : x;
+
+    if (leftDown && dragging_)
     {
-        dragging_ = false;
-        ::ReleaseCapture();
-        Notify(SB_THUMBTRACK, value_);
+        const int pos = ValueAtPixel(along - grabOff_);
+        if (pos != value_)
+        {
+            value_ = pos;
+            Notify(SB_THUMBPOSITION, value_);
+            Refresh();
+        }
+        return;
     }
+
+    // Only track the hover state when nothing is held, otherwise the thumb
+    // would flicker between colours as it slides out from under the cursor.
+    ArmLeaveNotify();
+    SetHover(HasRange() && OnThumb(along));
 }
 
-void ScrollBarView::OnLButtonDblClk(int x, int y)
+void ScrollBarView::OnLButtonUp()
 {
-    if (!HasRange()) return;
-    const int along = vert_ ? y : x;
-    const int target = (along < ThumbOffset() + ThumbLength() / 2) ? min_ : max_ - page_ + 1;
-    if (target == value_) return;
-    value_ = target;
-    Notify(vert_ ? SB_BOTTOM : SB_RIGHT, value_);
+    if (!dragging_) return;
+    dragging_ = false;
+    if (::GetCapture() == bar_) ::ReleaseCapture();
     Refresh();
+}
+
+void ScrollBarView::SetHover(bool on)
+{
+    if (on && !HasRange()) on = false;   // nothing to grab
+    if (hoverThumb_ == on) return;
+    hoverThumb_ = on;
+    Refresh();
+}
+
+void ScrollBarView::ArmLeaveNotify()
+{
+    if (tracking_) return;
+    TRACKMOUSEEVENT tme;
+    ::ZeroMemory(&tme, sizeof(tme));
+    tme.cbSize      = sizeof(tme);
+    tme.dwFlags     = TME_LEAVE;
+    tme.hwndTrack   = bar_;
+    tme.dwHoverTime = 0;
+    ::TrackMouseEvent(&tme);
+    tracking_ = true;
+}
+
+void ScrollBarView::Notify(int code, int value)
+{
+    if (owner_)
+        ::SendMessageW(owner_, vert_ ? WM_VSCROLL : WM_HSCROLL,
+                       MAKEWPARAM(code, (value & 0xFFFF)), 0);
 }
 
 // ---- window proc ----------------------------------------------------------
@@ -199,21 +246,31 @@ LRESULT ScrollBarView::WndProc(UINT msg, WPARAM wp, LPARAM lp)
         ::SetCursor(::LoadCursorW(nullptr, IDC_ARROW));
         return TRUE;
 
-    case WM_LBUTTONDOWN:
-        ::SetFocus(bar_);
-        OnLButtonDown(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
-        return 0;
-
-    case WM_LBUTTONDBLCLK:
-        OnLButtonDblClk(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
-        return 0;
-
     case WM_MOUSEMOVE:
         OnMouseMove(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), (wp & MK_LBUTTON) != 0);
         return 0;
 
-    case WM_LBUTTONUP:      OnLButtonUp(); return 0;
-    case WM_CAPTURECHANGED: dragging_ = false; return 0;
+    case WM_MOUSELEAVE:
+        tracking_ = false;
+        if (!dragging_) SetHover(false);
+        return 0;
+
+    case WM_LBUTTONDOWN:
+        ::SetFocus(bar_);
+        ArmLeaveNotify();
+        OnLButtonDown(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+        return 0;
+
+    case WM_LBUTTONUP:
+        OnLButtonUp();
+        return 0;
+
+    case WM_CAPTURECHANGED:
+        // The drag was cut short (a menu, a window switch). Drop the pressed
+        // colour, and let the next mouse move decide the hover one.
+        dragging_ = false;
+        Refresh();
+        return 0;
 
     case WM_MOUSEWHEEL:
         // The owner owns the wheel logic (the timeline maps it to rows or to
@@ -253,12 +310,14 @@ void ScrollBarView::OnPaint()
     {
         const int off = ThumbOffset();
         RECT t;
-        if (vert_) t = { rc.left + 2, rc.top + kFrame + off + 2,
-                         rc.right - 2, rc.top + kFrame + off + thumb - 2 };
-        else       t = { rc.left + kFrame + off + 2, rc.top + 2,
-                         rc.left + kFrame + off + thumb - 2, rc.bottom - 2 };
+        if (vert_) t = { rc.left + kThumbInset, rc.top + kFrame + off + kThumbInset,
+                         rc.right - kThumbInset, rc.top + kFrame + off + thumb - kThumbInset };
+        else       t = { rc.left + kFrame + off + kThumbInset, rc.top + kThumbInset,
+                         rc.left + kFrame + off + thumb - kThumbInset, rc.bottom - kThumbInset };
 
-        HBRUSH hb = ::CreateSolidBrush(kThumb);
+        const COLORREF c = dragging_  ? kThumbDown
+                         : (hoverThumb_ ? kThumbHover : kThumb);
+        HBRUSH hb = ::CreateSolidBrush(c);
         ::FillRect(dc, &t, hb);
         ::DeleteObject(hb);
     }

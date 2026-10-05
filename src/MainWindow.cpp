@@ -1443,13 +1443,13 @@ void MainWindow::OnCommand(int id)
 
     case IDM_HELP_ABOUT:
         ::MessageBoxW(hwnd_,
-                      TR(L"FastVideoCut 1.3.0\n\n"
+                      TR(L"FastVideoCut 1.4.0\n\n"
                          L"用 ffmpeg 做后端的黑屏自动剪辑工具：\n"
                          L"  · 黑屏检测 blackdetect\n"
                          L"  · 帧流缩略图 tile 快速展开\n"
                          L"  · 无损剪切 -c copy + concat 合并\n\n"
                          L"界面: Win32 / C++ (VC++)    后端: ffmpeg.exe",
-                         L"FastVideoCut 1.3.0\n\n"
+                         L"FastVideoCut 1.4.0\n\n"
                          L"Black frame auto cutter built on ffmpeg:\n"
                          L"  - black frame detection (blackdetect)\n"
                          L"  - timeline thumbnails via tile mosaics\n"
@@ -1626,6 +1626,66 @@ void MainWindow::StartDetectOne(int index)
     StartJobInternal(JobDetect, true, index);
 }
 
+// 无损合并前逐项比对参与合并的视频格式。返回用户的选择：
+//   · Proceed     —— 差异可以接受（或差异只在容器层面且用户不想转封装），照常合并
+//   · Cancel      —— 取消这次导出
+//   · RemuxFirst  —— 先把源转封装统一成 MP4，再走原来的无损合并
+// --nogui / --auto-export 下不能弹框，只把差异写进日志并放行。
+MergePlan MainWindow::ConfirmMergeFormats()
+{
+    if (args_.noGui) return MergePlan::Proceed;
+
+    // 只有真正要拼到一起（多个视频合成一个）才需要问。单个视频走的是“裁切”路径，
+    // 参数本来就要按它自己来，不存在拼接错配。
+    if (args_.mergeAll || project_.items.size() < 2) return MergePlan::Proceed;
+
+    // 重编码会先统一分辨率/帧率/音频，容器和时基也跟着重写，不需要问。
+    if (settings_.mergeReencode) return MergePlan::Proceed;
+
+    std::vector<const VideoInfo*> infos;
+    for (const VideoItem& it : project_.items)
+        if (!it.path.empty()) infos.push_back(&it.info);
+    if (infos.size() < 2) return MergePlan::Proceed;
+
+    std::vector<FormatMismatch> diffs;
+    if (VideoFormatsMatch(infos, diffs)) return MergePlan::Proceed;
+
+    const std::wstring list = DescribeFormatMismatch(diffs);
+
+    // 差异全是容器/时基/布局这类时，多给一条“快速转封装”的出路：只换容器不重编码，
+    // 几秒就能让 concat 对上时基。真正的编码/分辨率差异只能重编码，给了也没用。
+    if (MismatchIsRemuxFixable(diffs))
+    {
+        AppendLog(std::wstring(TR(L"合并前检查：以下差异会让无损拼接算错时间轴 ——", L"Merge pre-check: these differences would corrupt the timeline of a stream-copy merge:")) +
+                  L"\n" + list);
+        std::wstring msg = std::wstring(TR(L"列表里的视频封装格式或时基不一致。直接无损合并会算错时间轴：\n"
+                                           L"导出文件的时长会比实际长很多，超出的部分没有内容、播不出来。\n\n",
+                                           L"The videos in the list have different containers or time bases. Merging them with a plain "
+                                           L"lossless copy computes a wrong timeline:\n"
+                                           L"the exported file will be far longer than the real content, and the extra part will "
+                                           L"not play.\n\n"))
+                             + list + L"\n\n"
+                             + TR(L"是：强行合并\n否：取消合并\n取消：先把 MKV 等格式快速转封装成 MP4（不重编码，几秒即可），再无损合并",
+                                L"Yes: merge anyway\nNo: cancel the merge\nCancel: first quickly remux the MKV & co. to MP4 "
+                                L"(no re-encoding, takes seconds), then merge losslessly");
+        int r = ::MessageBoxW(hwnd_, msg.c_str(), L"FastVideoCut",
+                              MB_ICONWARNING | MB_YESNOCANCEL);
+        if (r == IDCANCEL) return MergePlan::RemuxFirst;
+        if (r == IDNO)     return MergePlan::Cancel;
+        return MergePlan::Proceed;
+    }
+
+    // 原来的两选一：编码参数真的不一样，流复制拼出来就是花屏/断音。
+    AppendLog(std::wstring(TR(L"合并前检查：以下格式不一致 ——", L"Merge pre-check: these formats do not match:")) + L"\n" + list);
+    std::wstring msg2 = std::wstring(TR(L"列表里的视频格式不一致，直接无损合并会花屏或断音：\n\n",
+                                        L"The videos in the list do not match; merging them with a plain lossless copy will produce "
+                                        "corrupted video or broken audio:\n\n"))
+                        + list + L"\n\n"
+                        + TR(L"是否仍然强行合并？", L"Merge anyway?");
+    int r = ::MessageBoxW(hwnd_, msg2.c_str(), L"FastVideoCut", MB_ICONWARNING | MB_YESNO);
+    return (r == IDYES) ? MergePlan::Proceed : MergePlan::Cancel;
+}
+
 void MainWindow::StartExport(int job)
 {
     if (jobRunning_) return;
@@ -1679,6 +1739,18 @@ void MainWindow::StartExport(int job)
                     L"Tip: by default every non-black segment is kept, black ones are not."),
                  MB_ICONINFORMATION);
         return;
+    }
+
+    // 多个视频要拼成一个时，先问用户格式对不对得上
+    if (job == JobMergeAll)
+    {
+        MergePlan plan = ConfirmMergeFormats();
+        if (plan == MergePlan::Cancel)
+        {
+            AppendLog(TR(L"已取消合并。", L"Merge cancelled."));
+            return;
+        }
+        mergePlan_ = plan;
     }
 
     StartJobInternal(job);
@@ -2152,6 +2224,36 @@ bool MainWindow::BuildOutputs(int job,
             }
             concatInputs = norm;
             concatEnc.reencode = false;     // 归一化之后可以无损拼接
+        }
+        else if (mergePlan_ == MergePlan::RemuxFirst)
+        {
+            // 用户选了“先快速转封装”。只换容器、统一时基，不动码流（-c copy），
+            // 几秒就好；源文件不动，中间文件都在临时目录里。
+            std::vector<std::wstring> remuxed;
+            for (size_t i = 0; i < concatInputs.size(); ++i)
+            {
+                if (cancel_.IsCancelled())
+                {
+                    err = TR(L"导出已取消", L"Export cancelled");
+                    DeleteDirectoryRecursive(workDir);
+                    return false;
+                }
+                PostUiMessage(hwnd_, UiStatus,
+                              FormatString(TR(L"快速转封装 %d/%d …", L"Remuxing %d/%d ..."),
+                                           (int)i + 1, (int)concatInputs.size()));
+                std::wstring n = PathCombine(workDir, FormatString(L"remux_%04d.mp4", (int)i));
+                std::string e;
+                if (!ffmpeg_.RemuxToMp4(concatInputs[i], n, cancel_, e))
+                {
+                    err = TR(L"快速转封装失败：\n", L"Remuxing failed:\n") + Utf8ToWide(e);
+                    DeleteDirectoryRecursive(workDir);
+                    return false;
+                }
+                segments.push_back(n);
+                remuxed.push_back(n);
+            }
+            concatInputs = remuxed;
+            concatEnc.reencode = false;
         }
 
         // 合并文件名按“第一个 + 最后一个”视频自动生成（公共前缀只写一次）：

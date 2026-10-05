@@ -156,11 +156,55 @@ std::wstring VideoItem::summaryText() const
                         info.width, info.height, info.fps, blackCount());
 }
 
-// HDR / SDR + 位深，例如 "HDR10 · 10bit"（未分析时为空）
-std::wstring VideoItem::formatText() const
+// 时间线左侧的技术信息三行。空字段直接跳过，避免出现 "HEVC |  | yuv420p"
+// 这种中间带空洞的写法。
+namespace
+{
+    std::wstring JoinFields(const std::vector<std::string>& parts)
+    {
+        std::wstring out;
+        for (size_t i = 0; i < parts.size(); ++i)
+        {
+            if (parts[i].empty()) continue;
+            if (!out.empty()) out += L" | ";
+            out += Utf8ToWide(parts[i]);
+        }
+        return out;
+    }
+}
+
+std::wstring VideoItem::streamLine() const
 {
     if (!info.valid()) return std::wstring();
-    return Utf8ToWide(info.formatLabel());
+    std::vector<std::string> f;
+    // 容器名放最左侧：扩展名会骗人（.mp4 里装 mkv 很常见），而容器/时基不一致
+    // 正是无损合并时长出问题的直接原因，放在最前面一眼能看出来。
+    f.push_back(info.containerLabel());
+    f.push_back(info.resolutionLabel());
+    f.push_back(info.fpsModeLabel());
+    f.push_back(info.fpsLabel());
+    return JoinFields(f);
+}
+
+std::wstring VideoItem::videoLine() const
+{
+    if (!info.valid()) return std::wstring();
+    std::vector<std::string> f;
+    f.push_back(info.videoCodecLabel());
+    f.push_back(info.profileLevelLabel());
+    f.push_back(info.pixFmtLabel());
+    return JoinFields(f);
+}
+
+std::wstring VideoItem::audioLine() const
+{
+    if (!info.valid()) return std::wstring();
+    if (!info.hasAudio) return TR(L"无音频", L"no audio");
+    std::vector<std::string> f;
+    f.push_back(info.audioCodecLabel());
+    f.push_back(info.channelLabel());
+    f.push_back(info.sampleRateLabel());
+    return JoinFields(f);
 }
 
 // ---------------------------------------------------------------------------
@@ -563,5 +607,159 @@ bool IsSupportedMediaFile(const std::wstring& path)
     std::vector<std::wstring> all = SupportedMediaExtensions();
     for (size_t i = 0; i < all.size(); ++i)
         if (ext == all[i]) return true;
+    return false;
+}
+
+// -----------------------------------------------------------------------
+// 无损合并前的格式一致性检查
+//
+// concat demuxer 的流复制只把码流首尾相接，既不会重编码也不会重新协商参数：
+// 分辨率/编码/帧率/采样率不同的两段拼在一起，ffmpeg 一样会“成功”，但播出来
+// 就是花屏、变色、音画不同步。所以必须在合并之前拦下来，并且逐项告诉用户
+// 差在哪里，由用户决定要不要强行合并。
+// -----------------------------------------------------------------------
+namespace
+{
+    // 一条有音轨、一条没有音轨，合并后必然缺声，所以“有无音轨”也算编码器差异
+    std::wstring AudioCodecDesc(const VideoInfo& v)
+    {
+        if (!v.hasAudio) return TR(L"无音轨", L"no audio track");
+        std::wstring s = Utf8ToWide(v.audioCodecLabel());
+        return s.empty() ? TR(L"未知", L"unknown") : s;
+    }
+
+    // 声道布局要一并比较：声道数相同但一个是 5.1(side) 一个是 5.1(rear)，
+    // 合并出来的环绕声也是错的。括号里的声道数和外层的 " / " 分隔不冲突。
+    std::wstring ChannelLayoutDesc(const VideoInfo& v)
+    {
+        std::wstring lay = Utf8ToWide(v.channelLayout);
+        if (lay.empty()) return FormatString(L"%d ch", v.channels);
+        return FormatString(L"%s (%d ch)", lay.c_str(), v.channels);
+    }
+
+    // 色彩空间固定写成 transfer/primaries/matrix 三段，缺的那段写“未标注”。
+    // 不能像别处那样把空段直接跳过：那样 "bt709/bt709/bt709" 和 "bt709/bt709"
+    // 会被看成两个不同的串，却说不清到底差在哪一项。
+    std::wstring ColourSpaceDesc(const VideoInfo& v)
+    {
+        const std::string* raw[3] = { &v.colorTransfer, &v.colorPrimaries, &v.colorSpace };
+        std::wstring s;
+        for (int i = 0; i < 3; ++i)
+        {
+            if (i) s += L"/";
+            const std::string& t = *raw[i];
+            s += (t.empty() || t == "unknown") ? TR(L"未标注", L"untagged") : Utf8ToWide(t);
+        }
+        return s;
+    }
+
+    // "v,a,s" -> "视频+音频+字幕"。只看首字母，够用且比 codec 名短得多。
+    std::wstring StreamLayoutDesc(const VideoInfo& v)
+    {
+        if (v.streamLayout.empty()) return std::wstring();
+        std::wstring out;
+        for (size_t i = 0; i < v.streamLayout.size(); ++i)
+        {
+            std::wstring one;
+            switch (v.streamLayout[i])
+            {
+            case 'v': one = TR(L"视频", L"video"); break;
+            case 'a': one = TR(L"音频", L"audio"); break;
+            case 's': one = TR(L"字幕", L"subtitle"); break;
+            case 'd': one = TR(L"数据", L"data"); break;
+            default:  one = L"?"; break;
+            }
+            if (!out.empty()) out += L"+";
+            out += one;
+        }
+        return out;
+    }
+}
+
+bool VideoFormatsMatch(const std::vector<const VideoInfo*>& infos,
+                       std::vector<FormatMismatch>& diffs)
+{
+    diffs.clear();
+    if (infos.size() < 2) return true;
+
+    struct Field
+    {
+        const wchar_t*     label;
+        std::wstring (*get)(const VideoInfo&);
+    };
+
+    const Field fields[] =
+    {
+        { TR(L"视频编码器", L"Video codec"),        [](const VideoInfo& v) { return Utf8ToWide(v.videoCodecLabel()); } },
+        { TR(L"音频编码器", L"Audio codec"),        [](const VideoInfo& v) { return AudioCodecDesc(v); } },
+        { TR(L"分辨率",     L"Resolution"),        [](const VideoInfo& v) { return Utf8ToWide(v.resolutionLabel()); } },
+        { TR(L"帧率",       L"Frame rate"),        [](const VideoInfo& v) { return Utf8ToWide(v.fpsLabel()) + L" " + Utf8ToWide(v.fpsModeLabel()); } },
+        { TR(L"像素格式",   L"Pixel format"),      [](const VideoInfo& v) { return Utf8ToWide(v.pixFmtLabel()); } },
+        { TR(L"编码档次与级别", L"Profile / level"),[](const VideoInfo& v) { return Utf8ToWide(v.profileLevelLabel()); } },
+        { TR(L"色彩空间",   L"Colour space"),    [](const VideoInfo& v) { return ColourSpaceDesc(v); } },
+        { TR(L"音频采样率", L"Audio sample rate"),[](const VideoInfo& v) { return Utf8ToWide(v.sampleRateLabel()); } },
+        { TR(L"声道数与声道布局", L"Channels / layout"), [](const VideoInfo& v) { return ChannelLayoutDesc(v); } },
+        // 下面三项不是“画质/音质”差异，而是 concat 拼接本身的前提条件，不一致
+        // 时 ffmpeg 不报错但产物时长会错到几百小时、播不完（见 kRemuxFixable）。
+        { TR(L"封装格式",   L"Container"),     [](const VideoInfo& v) { return Utf8ToWide(v.containerLabel()); } },
+        { TR(L"视频时基",   L"Video time base"),[](const VideoInfo& v) { return Utf8ToWide(v.videoTimeBase); } },
+        { TR(L"音频时基",   L"Audio time base"),[](const VideoInfo& v) { return Utf8ToWide(v.audioTimeBase); } },
+        { TR(L"流布局",     L"Stream layout"), [](const VideoInfo& v) { return StreamLayoutDesc(v); } },
+    };
+
+    for (size_t f = 0; f < sizeof(fields) / sizeof(fields[0]); ++f)
+    {
+        std::vector<std::wstring> values;
+        for (size_t i = 0; i < infos.size(); ++i)
+        {
+            std::wstring v = fields[f].get(*infos[i]);
+            if (v.empty()) continue;                 // ffprobe 没报出来，跳过
+            bool seen = false;
+            for (size_t k = 0; k < values.size(); ++k)
+                if (values[k] == v) { seen = true; break; }
+            if (!seen) values.push_back(v);
+        }
+        if (values.size() > 1)
+        {
+            FormatMismatch m;
+            m.label  = fields[f].label;
+            m.values = values;
+            diffs.push_back(m);
+        }
+    }
+    return diffs.empty();
+}
+
+std::wstring DescribeFormatMismatch(const std::vector<FormatMismatch>& diffs)
+{
+    std::wstring out;
+    for (size_t i = 0; i < diffs.size(); ++i)
+    {
+        if (!out.empty()) out += L"\n";
+        out += FormatString(TR(L"  · %s：", L"  - %s: "), diffs[i].label.c_str());
+        for (size_t k = 0; k < diffs[i].values.size(); ++k)
+        {
+            if (k) out += L" / ";
+            out += diffs[i].values[k];
+        }
+    }
+    return out;
+}
+
+bool MismatchIsRemuxFixable(const std::vector<FormatMismatch>& diffs)
+{
+    // 标签在 VideoFormatsMatch 里写死，这里按同样的 TR() 取一遍再比。不能在
+    // 命名空间里存成常量：TR() 依赖 Loc::Apply() 的运行期结果，静态初始化早于它。
+    const wchar_t* fixable[] = { TR(L"封装格式",   L"Container"),
+                                 TR(L"视频时基",   L"Video time base"),
+                                 TR(L"音频时基",   L"Audio time base"),
+                                 TR(L"流布局",     L"Stream layout") };
+    for (size_t i = 0; i < diffs.size(); ++i)
+    {
+        for (size_t k = 0; k < sizeof(fixable) / sizeof(fixable[0]); ++k)
+        {
+            if (diffs[i].label == fixable[k]) return true;
+        }
+    }
     return false;
 }

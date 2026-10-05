@@ -28,6 +28,7 @@
 #include "../src/Process.h"
 #include "../src/Ffmpeg.h"
 #include "../src/Project.h"
+#include "../src/Loc.h"
 
 #include <cstdio>
 #include <cmath>
@@ -258,6 +259,92 @@ int wmain(int argc, wchar_t** argv)
 // -----------------------------------------------------------------------
     // 5. black detection on the real file
     // -----------------------------------------------------------------------
+    // ---- 编码规格的显示名（左侧面板与合并检查都靠这些标签）----------------
+    ::wprintf(L"       spec: %hs | %hs | %hs | %hs | %hs | %hs | %hs\n",
+              info.videoCodecLabel().c_str(), info.profileLevelLabel().c_str(),
+              info.pixFmtLabel().c_str(), info.fpsModeLabel().c_str(),
+              info.audioCodecLabel().c_str(), info.channelLabel().c_str(),
+              info.sampleRateLabel().c_str());
+
+    Check(VideoCodecDisplayName("h264") == "AVC",    "h264 -> AVC");
+    Check(VideoCodecDisplayName("hevc") == "HEVC",   "hevc -> HEVC");
+    Check(VideoCodecDisplayName("AV1")  == "AV1",     "av1 -> AV1 (case insensitive)");
+    Check(VideoCodecDisplayName("vp9")  == "VP9",     "vp9 -> VP9");
+    Check(VideoCodecDisplayName("mpeg4")== "MPEG-4",  "mpeg4 -> MPEG-4");
+    Check(VideoCodecDisplayName("")     == "",        "empty codec -> empty");
+    Check(VideoCodecDisplayName("ffv1") == "FFV1",    "unknown codec -> upper case");
+
+    Check(AudioCodecDisplayName("aac", "LC")     == "AAC LC", "aac + LC -> AAC LC");
+    Check(AudioCodecDisplayName("aac", "HE-AAC") == "AAC HE", "aac + HE-AAC -> AAC HE");
+    Check(AudioCodecDisplayName("aac", "")       == "AAC",    "aac without profile");
+    Check(AudioCodecDisplayName("mp3", "")       == "MP3",    "mp3 -> MP3");
+    Check(AudioCodecDisplayName("flac", "")      == "FLAC",   "flac -> FLAC");
+
+    // level 值按编码换算：同是 4 级，h264 报 41，hevc 报 120
+    Check(LevelDisplay("h264", 41) == "L4.1", "h264 level 41 -> L4.1");
+    Check(LevelDisplay("h264", 31) == "L3.1", "h264 level 31 -> L3.1");
+    Check(LevelDisplay("h264", 40) == "L4",   "h264 level 40 -> L4");
+    Check(LevelDisplay("hevc", 120) == "L4",  "hevc level 120 -> L4");
+    Check(LevelDisplay("hevc", 93) == "L3.1", "hevc level 93 -> L3.1");
+    Check(LevelDisplay("hevc", 150) == "L5",  "hevc level 150 -> L5");
+    Check(LevelDisplay("h264", 0) == "",      "level 0 -> unknown");
+    Check(ProfileLevelDisplay("hevc", "Main", 120) == "Main@L4",   "Main@L4");
+    Check(ProfileLevelDisplay("h264", "High", 41)  == "High@L4.1", "High@L4.1");
+    Check(ProfileLevelDisplay("h264", "unknown", 0) == "",          "unknown profile -> empty");
+
+    Check(ChannelLayoutDisplay("stereo", 2) == "2.0", "stereo -> 2.0");
+    Check(ChannelLayoutDisplay("5.1", 6)     == "5.1", "5.1 -> 5.1");
+    Check(ChannelLayoutDisplay("", 6)        == "5.1", "no layout, 6 channels -> 5.1");
+    Check(ChannelLayoutDisplay("", 0)        == "",    "no layout, no channels");
+    Check(SampleRateDisplay(44100) == "44.1K", "44100 -> 44.1K");
+    Check(SampleRateDisplay(48000) == "48K",   "48000 -> 48K");
+    Check(SampleRateDisplay(0)     == "",      "0 -> unknown");
+    Check(FpsDisplay(25.0)   == "25fps",     "25 -> 25fps");
+    Check(FpsDisplay(23.976) == "23.976fps", "23.976 -> 23.976fps");
+    Check(FpsDisplay(0.0)    == "",          "0 fps -> unknown");
+
+    Check(FpsModeDisplay(25.0, 25.0) == "CFR", "r == avg -> CFR");
+    Check(FpsModeDisplay(25.0, 24.3) == "VBR", "avg != r -> VBR");
+    Check(FpsModeDisplay(25.0, 0.0)  == "CFR", "avg missing -> CFR");
+    Check(FpsModeDisplay(0.0, 0.0)   == "",    "no frame rate info -> unknown");
+
+    // 时间线左侧三行的排版：空字段不能留下 " |  | " 这样的空洞
+    {
+        VideoItem bare;
+        Check(bare.streamLine().empty() && bare.videoLine().empty() && bare.audioLine().empty(),
+              "an unprobed item shows no spec lines");
+
+        VideoItem full;
+        full.info = info;
+        ::wprintf(L"       row1: %ls\n       row2: %ls\n       row3: %ls\n",
+                  full.streamLine().c_str(), full.videoLine().c_str(),
+                  full.audioLine().c_str());
+        Check(full.streamLine().find(L"x") != std::wstring::npos &&
+              full.streamLine().find(L"fps") != std::wstring::npos,
+              "row 1 is resolution + frame rate", full.streamLine());
+        Check(full.videoLine() == Utf8ToWide(info.videoCodecLabel()) + L" | " +
+                                Utf8ToWide(info.profileLevelLabel()) + L" | " +
+                                Utf8ToWide(info.pixFmtLabel()),
+              "row 2 is codec + profile@level + pixel format", full.videoLine());
+        Check(full.audioLine() == Utf8ToWide(info.audioCodecLabel()) + L" | " +
+                                Utf8ToWide(info.channelLabel()) + L" | " +
+                                Utf8ToWide(info.sampleRateLabel()),
+              "row 3 is audio codec + channels + sample rate", full.audioLine());
+
+        // 缺字段时只显示有的那几个，不能出现空的竖线
+        VideoInfo sparse;
+        sparse.duration = 10.0; sparse.width = 1280; sparse.height = 720;
+        sparse.vcodec = "av1";
+        VideoItem s;
+        s.info = sparse;
+        Check(s.streamLine() == L"1280x720", "missing fps fields are dropped",
+              s.streamLine());
+        Check(s.videoLine() == L"AV1", "missing profile/pix_fmt are dropped",
+              s.videoLine());
+        Check(s.audioLine() == TR(L"无音频", L"no audio"), "no audio track is spelled out",
+              s.audioLine());
+    }
+
     ::wprintf(L"\n[5] blackdetect\n");
     BlackParams bp;
     std::vector<BlackRange> blacks;
@@ -586,6 +673,203 @@ int wmain(int argc, wchar_t** argv)
                       outInfo.duration, expected, (int)mergeParts.size());
             Check(Nearly(outInfo.duration, expected, 2.0), "merged duration matches selection");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // 9b. lossless merge format check
+    //     The GUI warns (or refuses) before merging sources whose format does
+    //     not match. That comparison is pure logic, so it is asserted here
+    //     without involving ffmpeg at all.
+    // -----------------------------------------------------------------------
+    ::wprintf(L"\n[9b] merge format check\n");
+    {
+        Loc::Apply(AppLang::English);        // deterministic field labels
+
+        VideoInfo a;                          // reference: 1080p25 AVC High + AAC LC 2.0/48k
+        a.duration = 10.0;
+        a.width = 1920;  a.height = 1080;
+        a.fps = 25.0;    a.rFps = 25.0; a.avgFps = 25.0;
+        a.vcodec = "h264"; a.profile = "High"; a.level = 41;
+        a.pixFmt = "yuv420p";
+        a.colorTransfer = "bt709"; a.colorPrimaries = "bt709"; a.colorSpace = "bt709";
+        a.hasAudio = true; a.acodec = "aac"; a.audioProfile = "LC";
+        a.sampleRate = 48000; a.channels = 2; a.channelLayout = "stereo";
+        // concat 按流序号对齐，所以容器 / 时基 / 流布局也必须一致
+        a.container = "mov,mp4,m4a,3gp,3g2,mj2";
+        a.videoTimeBase = "1/90000"; a.audioTimeBase = "1/48000";
+        a.streamLayout = "v,a";
+
+        std::vector<FormatMismatch> diffs;
+
+        std::vector<const VideoInfo*> one;
+        one.push_back(&a);
+        Check(VideoFormatsMatch(one, diffs), "a single video always matches");
+
+        VideoInfo b = a;
+        std::vector<const VideoInfo*> same;
+        same.push_back(&a); same.push_back(&b);
+        Check(VideoFormatsMatch(same, diffs) && diffs.empty(),
+              "two identical videos match");
+
+        // helper: mutating exactly one field has to be reported under that field
+        VideoInfo o;
+        std::vector<const VideoInfo*> pair;
+        auto Caught = [&](const VideoInfo& other, const wchar_t* field) {
+            pair.clear();
+            pair.push_back(&a); pair.push_back(&other);
+            if (VideoFormatsMatch(pair, diffs)) return false;
+            for (size_t i = 0; i < diffs.size(); ++i)
+                if (diffs[i].label == field) return true;
+            return false;
+        };
+
+        o = a; o.width = 1280; o.height = 720;
+        Check(Caught(o, TR(L"分辨率", L"Resolution")), "different resolution is caught");
+        o = a; o.vcodec = "hevc"; o.profile = "Main"; o.level = 120;
+        Check(Caught(o, TR(L"视频编码器", L"Video codec")), "different video codec is caught");
+        Check(Caught(o, TR(L"编码档次与级别", L"Profile / level")),
+              "different profile / level is caught");
+        o = a; o.fps = 30.0; o.rFps = 30.0; o.avgFps = 30.0;
+        Check(Caught(o, TR(L"帧率", L"Frame rate")), "different frame rate is caught");
+        o = a; o.avgFps = 24.3;                    // same nominal fps, but VFR
+        Check(Caught(o, TR(L"帧率", L"Frame rate")), "CFR vs VBR is caught");
+        o = a; o.pixFmt = "yuv420p10le";
+        Check(Caught(o, TR(L"像素格式", L"Pixel format")), "different pixel format is caught");
+        o = a; o.colorTransfer = "smpte2084"; o.colorPrimaries = "bt2020";
+        Check(Caught(o, TR(L"色彩空间", L"Colour space")), "different colour space is caught");
+        o = a; o.acodec = "mp3"; o.audioProfile.clear();
+        Check(Caught(o, TR(L"音频编码器", L"Audio codec")), "different audio codec is caught");
+        o = a; o.hasAudio = false; o.acodec.clear(); o.audioProfile.clear();
+        Check(Caught(o, TR(L"音频编码器", L"Audio codec")), "a missing audio track is caught");
+        o = a; o.sampleRate = 44100;
+        Check(Caught(o, TR(L"音频采样率", L"Audio sample rate")), "different sample rate is caught");
+        o = a; o.channels = 6; o.channelLayout = "5.1";
+        Check(Caught(o, TR(L"声道数与声道布局", L"Channels / layout")),
+              "different channel count / layout is caught");
+        o = a; o.channels = 2; o.channelLayout = "5.1(side)";
+        Check(Caught(o, TR(L"声道数与声道布局", L"Channels / layout")),
+              "same channel count but a different layout is caught");
+
+        // ffprobe 没报出来的字段不参与这一项的比较，不能误报成不一致
+        VideoInfo c = a;
+        c.pixFmt.clear(); c.profile.clear(); c.level = 0;
+        std::vector<const VideoInfo*> partial;
+        partial.push_back(&a); partial.push_back(&c);
+        Check(VideoFormatsMatch(partial, diffs),
+              "a field ffprobe did not report is skipped, not a mismatch");
+
+        // 色彩空间是例外：未标注和已标注确实不同，必须报出来
+        c = a; c.colorSpace = "unknown"; c.colorTransfer = "unknown";
+        c.colorPrimaries = "unknown";
+        partial.clear();
+        partial.push_back(&a); partial.push_back(&c);
+        Check(Caught(c, TR(L"色彩空间", L"Colour space")),
+              "an untagged colour space is not the same as a tagged one");
+
+        // 两条都没标注 -> 三段都是“未标注”，不算差异
+        VideoInfo d = a;
+        d.colorSpace = "unknown"; d.colorTransfer = "unknown"; d.colorPrimaries = "unknown";
+        partial.clear();
+        partial.push_back(&c); partial.push_back(&d);
+        Check(VideoFormatsMatch(partial, diffs),
+              "two untagged colour spaces still match");
+
+        // 提示文本
+        o = a; o.width = 1280; o.height = 720; o.sampleRate = 44100;
+        pair.clear(); pair.push_back(&a); pair.push_back(&o);
+        VideoFormatsMatch(pair, diffs);
+        Check(diffs.size() == 2, "two fields differ in this pair",
+              FormatString(L"%d", (int)diffs.size()));
+        std::wstring text = DescribeFormatMismatch(diffs);
+        Check(!text.empty() && text.find(L"1920x1080") != std::wstring::npos &&
+              text.find(L"1280x720") != std::wstring::npos,
+              "mismatch text lists both values", text);
+
+        // ---- 容器 / 时基 / 流布局 -------------------------------------------
+        // 这三项决定 concat 能不能对上流：1/1000 (mkv) 和 1/90000 (mp4) 混拼会
+        // 算出几百小时的假时长，流数不一致则整条流错位。都必须拦住。
+        o = a; o.container = "matroska,webm";
+        Check(Caught(o, TR(L"封装格式", L"Container")),
+              "an .mp4 that is really MKV is caught as a container mismatch");
+        o = a; o.videoTimeBase = "1/1000";
+        Check(Caught(o, TR(L"视频时基", L"Video time base")),
+              "a different video time base is caught");
+        o = a; o.audioTimeBase = "1/1000";
+        Check(Caught(o, TR(L"音频时基", L"Audio time base")),
+              "a different audio time base is caught");
+        o = a; o.streamLayout = "v,a,s";              // 多一条字幕流
+        Check(Caught(o, TR(L"流布局", L"Stream layout")),
+              "an extra subtitle stream is caught as a layout mismatch");
+
+        // 时基没报出来时跳过，不能误报
+        c = a; c.videoTimeBase.clear(); c.audioTimeBase.clear(); c.streamLayout.clear();
+        partial.clear(); partial.push_back(&a); partial.push_back(&c);
+        Check(VideoFormatsMatch(partial, diffs),
+              "unreported time base / layout is skipped, not a mismatch");
+
+        // ---- 哪些差异可以靠“转封装”修好 -------------------------------------
+        // 只有容器/时基/布局差异才值得在对话框里多给一个“快速转封装”的选项；
+        // 真正的编码/分辨率差异只能重编码，给了也没用。
+        o = a; o.container = "matroska,webm"; o.videoTimeBase = "1/1000";
+        pair.clear(); pair.push_back(&a); pair.push_back(&o);
+        VideoFormatsMatch(pair, diffs);
+        Check(MismatchIsRemuxFixable(diffs),
+              "container / time base differences are offered as remux-fixable");
+
+        o = a; o.width = 1280; o.height = 720;
+        pair.clear(); pair.push_back(&a); pair.push_back(&o);
+        VideoFormatsMatch(pair, diffs);
+        Check(!MismatchIsRemuxFixable(diffs),
+              "a plain resolution difference is not offered as remux-fixable");
+
+        o = a; o.vcodec = "hevc";
+        pair.clear(); pair.push_back(&a); pair.push_back(&o);
+        VideoFormatsMatch(pair, diffs);
+        Check(!MismatchIsRemuxFixable(diffs),
+              "a plain codec difference is not offered as remux-fixable");
+
+        Loc::Apply(Loc::Configured());
+    }
+
+    // -----------------------------------------------------------------------
+    // 9c. container label + the info line
+    // -----------------------------------------------------------------------
+    ::wprintf(L"\n[9c] container label\n");
+    {
+        VideoInfo c;
+        c.container = "matroska,webm";
+        Check(c.containerLabel() == "MKV", "matroska -> MKV", Utf8ToWide(c.containerLabel()));
+        c.container = "mov,mp4,m4a,3gp,3g2,mj2";
+        Check(c.containerLabel() == "MP4", "mp4 family -> MP4", Utf8ToWide(c.containerLabel()));
+        c.container = "avi";
+        Check(c.containerLabel() == "AVI", "avi -> AVI");
+        c.container = "mpegts";
+        Check(c.containerLabel() == "TS", "mpegts -> TS");
+        c.container = "somethingnew";
+        Check(c.containerLabel() == "Somethingnew",
+              "an unknown container still shows something", Utf8ToWide(c.containerLabel()));
+        c.container.clear();
+        Check(c.containerLabel().empty(), "no container -> empty label");
+
+        // 时间线第一行：容器在最左，其次分辨率 / 帧率格式 / 帧率
+        VideoItem it;
+        it.info.duration = 10.0; it.info.width = 1920; it.info.height = 1080;
+        it.info.fps = 25.0; it.info.rFps = 25.0; it.info.avgFps = 25.0;
+        it.info.container = "matroska,webm";
+        std::wstring line = it.streamLine();
+        Check(line.find(L"MKV") != std::wstring::npos &&
+              line.find(L"1920x1080") != std::wstring::npos &&
+              line.find(L"CFR") != std::wstring::npos &&
+              line.find(L"25fps") != std::wstring::npos,
+              "the info line shows MKV | 1920x1080 | CFR | 25fps", line);
+        Check(line.rfind(L"MKV") < line.find(L"1920x1080"),
+              "the container comes before the resolution", line);
+
+        // 没容器就整段省略，不能留下 " | 1920x1080" 这种开头空洞
+        it.info.container.clear();
+        line = it.streamLine();
+        Check(line.compare(0, 3, L" | ") != 0, "no leading separator", line);
+        Check(line.find(L"1920x1080") != std::wstring::npos, "resolution still shown", line);
     }
 
     // -----------------------------------------------------------------------

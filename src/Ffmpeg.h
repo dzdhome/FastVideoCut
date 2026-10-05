@@ -55,6 +55,24 @@ struct VideoInfo
     std::string colorSpace;               // bt709 / bt2020nc ...
     int         bitsPerRawSample = 0;     // as reported by ffprobe (0 = unknown)
 
+    // ---- 编码规格 -------------------------------------------------------
+    // 列表/时间线上要显示的“这一条片子到底是什么编码”，也是无损合并前
+    // 逐项比对的内容，所以原始字段全部保留，显示名交给下面的 label 函数。
+    std::string profile;                  // 视频档次: High / Main / Main 10 ...
+    int         level      = 0;           // 原始 level 值 (h264: 41 -> L4.1, hevc: 120 -> L4.0)
+    std::string audioProfile;             // 音频档次: LC / HE-AAC / ...
+    std::string channelLayout;            // stereo / 5.1 / mono ...
+    double      rFps        = 0.0;        // r_frame_rate（基准帧率）
+    double      avgFps      = 0.0;        // avg_frame_rate（实际平均帧率）
+    // 时基（time_base），如 "1/1000" / "1/90000"。concat 解复用器按流序号对齐，
+    // 时基不一致时它会把两种单位的 PTS 混算，产出几百小时的假时长 —— 这是
+    // “扩展名是 .mp4、实际是 mkv”这类文件合并后播不完的真正原因。
+    std::string videoTimeBase;            // 视频流时基
+    std::string audioTimeBase;            // 音频流时基
+    // 流布局签名，如 "v,a,s"（按流序号）。concat 同样按序号对齐，多一条字幕
+    // 就会让后面所有流整体错位，所以也要参与合并前的比对。
+    std::string streamLayout;
+
     bool valid() const { return duration > 0.0 && width > 0 && height > 0; }
 
     // Bit depth per channel. Falls back to the pixel format name when
@@ -65,8 +83,41 @@ struct VideoInfo
     std::string hdrLabel() const;         // "HDR10" / "HLG" / "SDR"
     std::string bitDepthLabel() const;    // "10bit" / "8bit" / ""
     std::string formatLabel() const;      // "HDR · 10bit"
+
+    // ---- 显示用标签（一律 UTF-8；ffprobe 没报到的字段返回空串）----------
+    std::string resolutionLabel() const;  // "1920x1080"
+    std::string videoCodecLabel() const;  // "AVC" / "HEVC" / "AV1" / "VP9" / "MPEG-4"
+    std::string profileLevelLabel() const;// "Main@L4" / "High@L4.1"
+    std::string pixFmtLabel() const;      // "yuv420p" / "yuv420p10le"
+    std::string fpsModeLabel() const;     // "CFR" / "VBR"
+    std::string fpsLabel() const;         // "25fps" / "23.976fps"
+    std::string audioCodecLabel() const;  // "AAC LC" / "MP3" / "FLAC"
+    std::string channelLabel() const;     // "2.0" / "5.1" / "7.1"
+    std::string sampleRateLabel() const;  // "48K" / "44.1K"
+    std::string colorSpaceLabel() const;  // "bt709" / "bt2020nc"（unknown 视为空）
+    // "matroska,webm" -> "MKV"，"mov,mp4,m4a,..." -> "MP4"。
+    // 用 MKV/MP4 这种一眼能懂的简写，而不是 Matroska/MPEG-4：文件名列表里
+    // 大家认的就是扩展名，一看就知道能不能合。
+    std::string containerLabel() const;   // "MKV" / "MP4" / "AVI" / "TS"
 };
 
+// --------------------- label helpers (unit testable) ----------------------
+// "h264" -> "AVC"，"hevc" -> "HEVC"，未知的编码名原样转成大写
+std::string VideoCodecDisplayName(const std::string& codec);
+// "aac" + "LC" -> "AAC LC"；"mp3" -> "MP3"
+std::string AudioCodecDisplayName(const std::string& codec, const std::string& profile);
+// level 值按编码换算成 "L4.1" / "L4"（h264 除 10，hevc 除 30，av1 用 seq_level_idx）
+std::string LevelDisplay(const std::string& codec, int level);
+// "High@L4.1"；档次或 level 缺失时只显示已有的一半
+std::string ProfileLevelDisplay(const std::string& codec, const std::string& profile, int level);
+// "stereo" -> "2.0"，"5.1" -> "5.1"；没有布局时按声道数推
+std::string ChannelLayoutDisplay(const std::string& layout, int channels);
+// 44100 -> "44.1K"，48000 -> "48K"，22050 -> "22.05K"
+std::string SampleRateDisplay(int sampleRate);
+// 25.0 -> "25fps"，23.976 -> "23.976fps"
+std::string FpsDisplay(double fps);
+// r_frame_rate 与 avg_frame_rate 一致 -> "CFR"，否则 "VBR"（可变帧率）
+std::string FpsModeDisplay(double rFps, double avgFps);
 // Derives the bit depth from a pixel format name ("yuv420p10le" -> 10).
 int BitDepthFromPixFmt(const std::string& pixFmt);
 
@@ -160,6 +211,15 @@ public:
     bool Normalize(const std::wstring& in, const std::wstring& out,
                    int width, int height, double fps, bool hasAudio,
                    const EncodeOptions& enc, std::string& err) const;
+
+    // Remuxes `in` into an MP4 with a fixed timescale, without touching the codec
+    // (`-c copy`). This is what makes a MKV + MP4 merge work: concat aligns streams
+    // by index and interprets timestamps in each file's own time_base, so a 1/1000
+    // (mkv) next to a 1/90000 (mp4) yields a bogus multi-hour duration. Pinning
+    // -video_track_timescale makes every part share one time_base, which fixes it
+    // while staying far faster than re-encoding.
+    bool RemuxToMp4(const std::wstring& in, const std::wstring& out,
+                    const CancelToken& cancel, std::string& err) const;
 
 private:
     // One blackdetect pass over [t0, t0+dur]; timestamps stay absolute

@@ -513,7 +513,7 @@ void TimelineView::UpdateVScrollBar()
 int TimelineView::RowHeight() const
 {
     int h = thumbH_ + 14;
-    // 左侧面板有 4 行（标题 / 时长·分辨率·fps / 规格 / 已选段），最小高度要放得下
+    // 左侧面板有 4 行（标题 / 分辨率·帧率 / 视频编码 / 音频编码+状态），最小高度要放得下
     if (h < kMinRowH) h = kMinRowH;
     return h;
 }
@@ -909,7 +909,7 @@ void TimelineView::DrawLeftPanel(HDC dc, const RECT& rc)
     RECT tr = h;
     tr.left += 10;
     tr.top += 3;
-    ::DrawTextW(dc, TR(L"视频 / 时长 / 黑屏", L"Video / length / black"),
+    ::DrawTextW(dc, TR(L"视频 / 规格 / 黑屏", L"Video / format / black"),
              -1, &tr, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
     ::SelectObject(dc, oldFont);
 
@@ -997,46 +997,53 @@ void TimelineView::DrawRow(HDC dc, int index, const RECT& rc)
 
     ::SelectObject(dc, fontSmall_);
     ::SetTextColor(dc, kClrTextDim);
+
+    // 左侧面板四行：
+    //   1. 视频名
+    //   2. 1920x1080 | VBR | 25fps
+    //   3. HEVC | Main@L4 | yuv420p
+    //   4. AAC LC | 2.0 | 48K            + 右侧状态
     RECT l2 = tr;
     l2.top = rc.top + 22;
     l2.bottom = rc.top + 38;
-    ::DrawTextW(dc, it.summaryText().c_str(), -1, &l2,
+    ::DrawTextW(dc, it.streamLine().c_str(), -1, &l2,
                 DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
-    // 第 3 行：画面规格（HDR/SDR · 10bit），有 ffprobe 结果才显示
     RECT l3 = l2;
     l3.top = rc.top + 38;
     l3.bottom = rc.top + 54;
-    std::wstring fmt = it.formatText();
-    if (!fmt.empty())
-    {
-        // HDR 用高亮色标出，SDR 用普通灰色
-        ::SetTextColor(dc, it.info.isHdr() ? kClrHdr : kClrTextDim);
-        ::DrawTextW(dc, fmt.c_str(), -1, &l3,
-                    DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-    }
+    ::DrawTextW(dc, it.videoLine().c_str(), -1, &l3,
+                DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
-    // 第 4 行：选段统计 / 错误信息
     RECT l4 = l3;
     l4.top = rc.top + 54;
     l4.bottom = rc.top + 70;
-    std::wstring line4;
     if (it.status == ItemStatus::Error)
     {
-        line4 = TR(L"错误: ", L"Error: ") + it.message;
+        // 出错时第 4 行整行让给错误详情。状态栏右侧那格此时是空的（错误信息
+        // 往往比半行宽，硬塞右半边会被截得看不出是什么错），所以直接占满整行。
         ::SetTextColor(dc, kClrBlackBrd);
+        ::DrawTextW(dc, (TR(L"错误: ", L"Error: ") + it.message).c_str(), -1, &l4,
+                    DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
     }
     else
     {
-        line4 = FormatString(TR(L"已选 %d/%d 段 · 保留 %s · %s",
-                                L"kept %d/%d - %s - %s"),
-                             it.selectedSegmentCount(), (int)it.segments.size(),
-                             FormatClock(it.selectedDuration()).c_str(),
-                             it.statusText().c_str());
+        std::wstring audio = it.audioLine();
+        if (!audio.empty())
+        {
+            // 位深 > 8 的片子（HDR / 10bit 源）用高亮色标出，一眼能挑出来
+            ::SetTextColor(dc, it.info.bitDepth() > 8 ? kClrHdr : kClrTextDim);
+            ::DrawTextW(dc, audio.c_str(), -1, &l4,
+                        DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        }
+
+        // 状态右对齐放在同一行的右半边，省一行高度
+        RECT st = l4;
+        st.left = (l4.left + l4.right) / 2;
         ::SetTextColor(dc, kClrTextDim);
+        ::DrawTextW(dc, it.statusText().c_str(), -1, &st,
+                    DT_RIGHT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
     }
-    ::DrawTextW(dc, line4.c_str(), -1, &l4,
-                DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
     // ---- frame strip ------------------------------------------------------
     RECT strip = rc;

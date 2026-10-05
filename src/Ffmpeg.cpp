@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 #include <algorithm>
 #include <vector>
 
@@ -352,6 +353,276 @@ std::string VideoInfo::formatLabel() const
 {
     return hdrLabel() + " · " + bitDepthLabel();
 }
+// -----------------------------------------------------------------------
+// 编码规格的显示名
+//
+// ffprobe 报的是原始字段（h264 / LC / stereo / 48000），界面上要显示的是
+// 大家习惯的说法（AVC / AAC LC / 2.0 / 48K），统一在这里做一层换算。
+// 认不出来的编码名原样返回（转成大写），宁可显示原始名字也不要显示空白。
+// -----------------------------------------------------------------------
+namespace
+{
+    std::string LowerAscii(const std::string& s)
+    {
+        std::string r = s;
+        for (size_t i = 0; i < r.size(); ++i)
+            if (r[i] >= 'A' && r[i] <= 'Z') r[i] = (char)(r[i] - 'A' + 'a');
+        return r;
+    }
+
+    std::string UpperAscii(const std::string& s)
+    {
+        std::string r = s;
+        for (size_t i = 0; i < r.size(); ++i)
+            if (r[i] >= 'a' && r[i] <= 'z') r[i] = (char)(r[i] - 'a' + 'A');
+        return r;
+    }
+
+    struct Alias { const char* name; const char* display; };
+
+    // ffprobe 的 codec_name -> 习惯叫法
+    const Alias kVideoCodecAliases[] =
+    {
+        { "h264",       "AVC"    }, { "avc",        "AVC"    },
+        { "h265",       "HEVC"   }, { "hevc",       "HEVC"   },
+        { "av1",        "AV1"    }, { "vp9",        "VP9"    },
+        { "vp8",        "VP8"    }, { "mpeg4",      "MPEG-4" },
+        { "mpeg2video", "MPEG-2" }, { "mpeg1video", "MPEG-1" },
+        { "vc1",        "VC-1"   }, { "prores",     "ProRes" },
+        { "dnxhd",      "DNxHD"  }, { "dvvideo",    "DV"     },
+        { "wmv3",       "WMV3"   }, { "wmv2",       "WMV2"   },
+        { "theora",     "Theora" },
+    };
+
+    const Alias kAudioCodecAliases[] =
+    {
+        { "mp3",        "MP3"    }, { "mp3float",   "MP3"    },
+        { "ac3",        "AC3"    }, { "eac3",       "E-AC3"  },
+        { "flac",       "FLAC"   }, { "alac",       "ALAC"   },
+        { "opus",       "Opus"   }, { "vorbis",     "Vorbis" },
+        { "dts",        "DTS"    }, { "truehd",     "TrueHD" },
+        { "wmav2",      "WMAV2"  }, { "pcm_s16le",  "PCM"    },
+        { "pcm_s16be",  "PCM"    }, { "pcm_s24le",  "PCM"    },
+        { "pcm_s24be",  "PCM"    }, { "pcm_s32le",  "PCM"    },
+        { "pcm_u8",     "PCM"    }, { "pcm_f32le",  "PCM"    },
+    };
+
+    // ffprobe 的 channel_layout -> "2.0" / "5.1"
+    const Alias kChannelLayouts[] =
+    {
+        { "mono",             "1.0"  }, { "stereo",           "2.0"  },
+        { "2.1",              "2.1"  }, { "3.0",              "3.0"  },
+        { "3.0(back)",        "3.0"  }, { "4.0",              "4.0"  },
+        { "quad",             "4.0"  }, { "quad(side)",       "4.0"  },
+        { "4.1",              "4.1"  }, { "5.0",              "5.0"  },
+        { "5.0(side)",        "5.0"  }, { "5.1",              "5.1"  },
+        { "5.1(side)",        "5.1"  }, { "6.0",              "6.0"  },
+        { "6.0(front)",       "6.0"  }, { "hexagonal",        "6.0"  },
+        { "6.1",              "6.1"  }, { "6.1(back)",        "6.1"  },
+        { "6.1(front)",       "6.1"  }, { "7.0",              "7.0"  },
+        { "7.0(front)",       "7.0"  }, { "7.1",              "7.1"  },
+        { "7.1(wide)",        "7.1"  }, { "7.1(wide-side)",   "7.1"  },
+        { "7.1(back)",        "7.1"  }, { "7.1(top-back)",    "7.1"  },
+        { "octagonal",        "7.1"  }, { "downmix",          "2.0"  },
+    };
+
+    const char* LookupAlias(const Alias* table, size_t count, const std::string& key)
+    {
+        for (size_t i = 0; i < count; ++i)
+            if (key == table[i].name) return table[i].display;
+        return nullptr;
+    }
+}
+std::string VideoCodecDisplayName(const std::string& codec)
+{
+    if (codec.empty()) return std::string();
+    const char* d = LookupAlias(kVideoCodecAliases,
+                                sizeof(kVideoCodecAliases) / sizeof(kVideoCodecAliases[0]),
+                                LowerAscii(codec));
+    return d ? std::string(d) : UpperAscii(codec);
+}
+
+std::string AudioCodecDisplayName(const std::string& codec, const std::string& profile)
+{
+    std::string c = LowerAscii(codec);
+    if (c.empty()) return std::string();
+
+    // AAC 的档次（LC / HE-AAC …）要跟在编码名后面，其余编码只显示编码名
+    if (c == "aac")
+    {
+        std::string p = LowerAscii(profile);
+        if      (p == "lc") return "AAC LC";
+        else if (p == "he-aac" || p == "he-aacv1" || p == "he-aacv2") return "AAC HE";
+        else if (p == "main") return "AAC Main";
+        else if (p == "ssr")  return "AAC SSR";
+        return "AAC";
+    }
+
+    const char* d = LookupAlias(kAudioCodecAliases,
+                                sizeof(kAudioCodecAliases) / sizeof(kAudioCodecAliases[0]), c);
+    return d ? std::string(d) : UpperAscii(codec);
+}
+
+std::string LevelDisplay(const std::string& codec, int level)
+{
+    if (level <= 0) return std::string();
+
+    std::string c = LowerAscii(codec);
+    int major = 0, minor = 0;
+    if (c == "hevc" || c == "h265")
+    {
+        // HEVC 的 level_idc 是 level * 30：120 -> 4.0，93 -> 3.1，150 -> 5.0
+        major = level / 30;
+        minor = (level % 30 + 1) / 3;      // 3 -> 1，6 -> 2，9 -> 3
+    }
+    else if (c == "av1")
+    {
+        // AV1 的 level 是 seq_level_idx：0 -> 2.0，每 4 档升一级（8 -> 4.0）
+        major = 2 + level / 4;
+        minor = level % 4;
+    }
+    else
+    {
+        // H.264 / MPEG-4 / VP9 等直接是 level * 10：41 -> 4.1，31 -> 3.1
+        major = level / 10;
+        minor = level % 10;
+    }
+    if (major <= 0) return std::string();
+    if (minor > 0)  return "L" + std::to_string(major) + "." + std::to_string(minor);
+    return "L" + std::to_string(major);
+}
+
+std::string ProfileLevelDisplay(const std::string& codec, const std::string& profile, int level)
+{
+    std::string p = profile;
+    if (p == "unknown") p.clear();
+    std::string lv = LevelDisplay(codec, level);
+    if (p.empty()) return lv;
+    if (lv.empty()) return p;
+    return p + "@" + lv;
+}
+
+std::string ChannelLayoutDisplay(const std::string& layout, int channels)
+{
+    const char* d = LookupAlias(kChannelLayouts,
+                                sizeof(kChannelLayouts) / sizeof(kChannelLayouts[0]),
+                                LowerAscii(layout));
+    if (d) return d;
+
+    // 没有声道布局时按声道数猜一个常见写法（猜错了也只是显示，不参与比较）
+    switch (channels)
+    {
+    case 1: return "1.0";
+    case 2: return "2.0";
+    case 3: return "3.0";
+    case 4: return "4.0";
+    case 5: return "5.0";
+    case 6: return "5.1";
+    case 7: return "6.1";
+    case 8: return "7.1";
+    }
+    return channels > 0 ? std::to_string(channels) + "ch" : std::string();
+}
+
+std::string SampleRateDisplay(int sampleRate)
+{
+    if (sampleRate <= 0) return std::string();
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%gK", sampleRate / 1000.0);
+    return buf;
+}
+
+std::string FpsDisplay(double fps)
+{
+    if (fps <= 0.0) return std::string();
+    char buf[32];
+    double r = std::floor(fps + 0.5);
+    if (std::fabs(fps - r) < 0.0005)
+        std::snprintf(buf, sizeof(buf), "%dfps", (int)r);
+    else
+        std::snprintf(buf, sizeof(buf), "%gfps", fps);
+    return buf;
+}
+
+std::string FpsModeDisplay(double rFps, double avgFps)
+{
+    if (rFps <= 0.0 && avgFps <= 0.0) return std::string();
+    if (rFps <= 0.0) return "VBR";
+    if (avgFps <= 0.0) return "CFR";
+    // 恒定帧率的流 r_frame_rate 与 avg_frame_rate 完全一致；可变帧率（VBR）
+    // 的平均帧率会明显偏离基准帧率。留 1% 容差免得舍入误差误判。
+    return (std::fabs(avgFps - rFps) <= rFps * 0.01) ? "CFR" : "VBR";
+}
+
+// ---- VideoInfo 的显示标签 ---------------------------------------------
+std::string VideoInfo::resolutionLabel() const
+{
+    if (width <= 0 || height <= 0) return std::string();
+    return std::to_string(width) + "x" + std::to_string(height);
+}
+
+std::string VideoInfo::videoCodecLabel() const   { return VideoCodecDisplayName(vcodec); }
+std::string VideoInfo::profileLevelLabel() const { return ProfileLevelDisplay(vcodec, profile, level); }
+std::string VideoInfo::pixFmtLabel() const       { return pixFmt; }
+std::string VideoInfo::fpsModeLabel() const      { return FpsModeDisplay(rFps, avgFps); }
+std::string VideoInfo::fpsLabel() const          { return FpsDisplay(fps); }
+std::string VideoInfo::audioCodecLabel() const   { return AudioCodecDisplayName(acodec, audioProfile); }
+std::string VideoInfo::channelLabel() const      { return ChannelLayoutDisplay(channelLayout, channels); }
+std::string VideoInfo::sampleRateLabel() const   { return SampleRateDisplay(sampleRate); }
+
+std::string VideoInfo::colorSpaceLabel() const
+{
+    std::string s = colorSpace;
+    if (s == "unknown") s.clear();          // ffprobe 对未标注的流一律报 unknown
+    return s;
+}
+
+std::string VideoInfo::containerLabel() const
+{
+    if (container.empty()) return std::string();
+
+    // ffprobe 的 format_name 是一串同义名（"matroska,webm"、"mov,mp4,m4a,3gp,3g2,mj2"），
+    // 顺序即优先级。这里挑第一个认识的，没有认识的再退化到首字母大写。
+    static const struct { const char* key; const char* label; } kMap[] =
+    {
+        { "matroska", "MKV"    },
+        { "webm",     "WebM"   },     // 同为 matroska 分支，但语义不同，保留全称
+        { "avi",      "AVI"    },
+        { "mpegts",   "TS"     },     // MPEG-TS，列表里写 "TS" 更短
+        { "asf",      "ASF"    },
+        { "flv",      "FLV"    },
+        { "mov",      "MP4"    },     // QuickTime 家族：MP4 / MOV / m4a / 3gp
+        { "mp4",      "MP4"    },
+        { "m4v",      "MP4"    },
+        { "3gp",      "3GP"    },
+        { "ogg",      "Ogg"    },
+        { "wav",      "WAV"    },
+    };
+
+    std::string names = container;
+    // "mov,mp4,m4a,3gp,3g2,mj2" 逐项查；"matroska,webm" 查第一项即可。
+    size_t pos = 0;
+    while (pos <= names.size())
+    {
+        size_t comma = names.find(',', pos);
+        std::string one = names.substr(pos, comma == std::string::npos
+                                            ? std::string::npos : comma - pos);
+        for (size_t i = 0; i < sizeof(kMap) / sizeof(kMap[0]); ++i)
+        {
+            if (one == kMap[i].key) return kMap[i].label;
+        }
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+
+    // 都不认识：取首项去分隔符后首字母大写，至少不会显示成空的
+    size_t cut = names.find(',');
+    std::string one = names.substr(0, cut);
+    if (one.empty()) return std::string();
+    one[0] = static_cast<char>(::toupper(static_cast<unsigned char>(one[0])));
+    return one;
+}
+
 // ---------------------------------------------------------------------------
 // probe
 // ---------------------------------------------------------------------------
@@ -382,7 +653,8 @@ bool Ffmpeg::Probe(const std::wstring& file, VideoInfo& info, std::string& err,
         a.push_back(L"-select_streams"); a.push_back(L"v:0");
         a.push_back(L"-show_entries");
         a.push_back(L"stream=codec_name,width,height,r_frame_rate,avg_frame_rate,nb_frames,duration,"
-                    L"pix_fmt,bits_per_raw_sample,color_transfer,color_primaries,color_space");
+                    L"pix_fmt,bits_per_raw_sample,color_transfer,color_primaries,color_space,"
+                    L"profile,level,time_base");
         a.push_back(L"-of");             a.push_back(L"default=noprint_wrappers=1");
         a.push_back(file);
 
@@ -412,19 +684,27 @@ bool Ffmpeg::Probe(const std::wstring& file, VideoInfo& info, std::string& err,
             else if (k == "r_frame_rate")
             {
                 double f = ParseRational(v);
-                if (f > 0.0) info.fps = f;
+                if (f > 0.0) info.rFps = f;
             }
             else if (k == "avg_frame_rate")
             {
                 double f = ParseRational(v);
-                if (f > 0.0 && f < 1000.0) info.fps = f;
+                if (f > 0.0) info.avgFps = f;
             }
             else if (k == "pix_fmt")             info.pixFmt = v;
             else if (k == "bits_per_raw_sample") info.bitsPerRawSample = atoi(v.c_str());
             else if (k == "color_transfer")      info.colorTransfer = v;
             else if (k == "color_primaries")     info.colorPrimaries = v;
             else if (k == "color_space")         info.colorSpace = v;
+            else if (k == "profile")             info.profile = v;
+            else if (k == "level")               info.level = atoi(v.c_str());
+            else if (k == "time_base")           info.videoTimeBase = v;
         }
+
+        // r_frame_rate 是容器里写的基准帧率，avg_frame_rate 是实际平均帧率；
+        // 两者都是才有意义，VBR 时 avg 会偏离 r（fpsModeLabel 据此判断 CFR/VBR）。
+        if (info.rFps > 0.0) info.fps = info.rFps;
+        else if (info.avgFps > 0.0 && info.avgFps < 1000.0) info.fps = info.avgFps;
 
         if (info.width <= 0 || info.height <= 0)
         {
@@ -473,7 +753,7 @@ bool Ffmpeg::Probe(const std::wstring& file, VideoInfo& info, std::string& err,
         std::vector<std::wstring> a;
         a.push_back(L"-v");              a.push_back(L"error");
         a.push_back(L"-select_streams"); a.push_back(L"a:0");
-        a.push_back(L"-show_entries");   a.push_back(L"stream=codec_name,sample_rate,channels,start_time");
+        a.push_back(L"-show_entries");   a.push_back(L"stream=codec_name,sample_rate,channels,start_time,profile,channel_layout,time_base");
         a.push_back(L"-of");             a.push_back(L"default=noprint_wrappers=1");
         a.push_back(file);
 
@@ -489,9 +769,40 @@ bool Ffmpeg::Probe(const std::wstring& file, VideoInfo& info, std::string& err,
                     info.acodec = kv[i].second;
                     info.hasAudio = true;
                 }
-                else if (kv[i].first == "sample_rate") info.sampleRate = atoi(kv[i].second.c_str());
-                else if (kv[i].first == "channels")    info.channels = atoi(kv[i].second.c_str());
-                else if (kv[i].first == "start_time")  info.audioStartTime = atof(kv[i].second.c_str());
+                else if (kv[i].first == "sample_rate")   info.sampleRate   = atoi(kv[i].second.c_str());
+                else if (kv[i].first == "channels")      info.channels      = atoi(kv[i].second.c_str());
+                else if (kv[i].first == "start_time")    info.audioStartTime = atof(kv[i].second.c_str());
+                else if (kv[i].first == "profile")       info.audioProfile  = kv[i].second;
+                else if (kv[i].first == "channel_layout") info.channelLayout = kv[i].second;
+                else if (kv[i].first == "time_base")      info.audioTimeBase = kv[i].second;
+            }
+        }
+    }
+
+    // --- stream layout -----------------------------------------------------
+    // concat 解复用器把 N 个文件按“流序号”一一对应起来，而不是按 codec_type
+    // 去认。所以「v,a,s」和「v,a」这种差一条字幕的情况必须拦下来：它不会报错，
+    // 但第二条文件的音轨会被当成第三条流接上去，结果是时长乱掉、播不完。
+    {
+        std::vector<std::wstring> a;
+        a.push_back(L"-v");              a.push_back(L"error");
+        a.push_back(L"-show_entries");   a.push_back(L"stream=index,codec_type");
+        a.push_back(L"-of");             a.push_back(L"default=noprint_wrappers=1");
+        a.push_back(file);
+
+        ProcessResult r;
+        if (RunProcessCapture(paths_.ffprobe, JoinArgs(a), std::wstring(), cancel, r) &&
+            r.exitCode == 0)
+        {
+            std::vector<std::pair<std::string, std::string> > kv = ParseKeyValueLines(r.output);
+            for (size_t i = 0; i < kv.size(); ++i)
+            {
+                if (kv[i].first != "codec_type" || kv[i].second.empty()) continue;
+                const std::string& t = kv[i].second;
+                if (!info.streamLayout.empty()) info.streamLayout += ",";
+                // 只留首字母：v / a / s / d（video/audio/subtitle/data），显示更紧凑
+                info.streamLayout += (t[0] == 'v' || t[0] == 'a' || t[0] == 's' || t[0] == 'd')
+                                     ? t[0] : '?';
             }
         }
     }
@@ -1028,6 +1339,53 @@ bool Ffmpeg::Normalize(const std::wstring& in, const std::wstring& out,
     if (r.exitCode != 0 || !FileExists(out))
     {
         err = "normalize failed (exit " + FormatSecondsUtf8((double)r.exitCode, 0) + "): " + r.output;
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// remux (换容器 + 统一时基，不动码流)
+// ---------------------------------------------------------------------------
+bool Ffmpeg::RemuxToMp4(const std::wstring& in, const std::wstring& out,
+                        const CancelToken& cancel, std::string& err) const
+{
+    err.clear();
+
+    if (!available())
+    {
+        err = "ffmpeg not available";
+        return false;
+    }
+
+    std::vector<std::wstring> a;
+    a.push_back(L"-y");
+    a.push_back(L"-hide_banner");
+    a.push_back(L"-nostdin");
+    a.push_back(L"-loglevel");  a.push_back(L"error");
+    a.push_back(L"-i");         a.push_back(in);
+    // 只取默认视频/音频流：mkv 里的字幕流、内嵌封面都不能进 mp4，否则 concat
+    // 会按流序号错位。-map 也保证每个 part 的流布局都是干净的 "v,a"。
+    a.push_back(L"-map");       a.push_back(L"0:v:0");
+    a.push_back(L"-map");       a.push_back(L"0:a:0?");
+    a.push_back(L"-c");         a.push_back(L"copy");
+    // 关键：把所有 part 的视频时基钉成同一个。concat 按各文件自己的 time_base
+    // 解释时间戳，1/1000 和 1/90000 混在一起会算出几百小时的假时长。
+    a.push_back(L"-video_track_timescale"); a.push_back(L"90000");
+    a.push_back(L"-movflags");  a.push_back(L"+faststart");
+    a.push_back(out);
+
+    Log(L"ffmpeg " + JoinArgs(a));
+
+    ProcessResult r;
+    if (!RunProcessCapture(paths_.ffmpeg, JoinArgs(a), std::wstring(), cancel, r))
+    {
+        err = "failed to start ffmpeg";
+        return false;
+    }
+    if (r.exitCode != 0 || !FileExists(out))
+    {
+        err = "remux failed (exit " + FormatSecondsUtf8((double)r.exitCode, 0) + "): " + r.output;
         return false;
     }
     return true;

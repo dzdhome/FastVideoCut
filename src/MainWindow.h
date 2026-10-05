@@ -48,6 +48,14 @@ enum FcJob
     JobOpenOnly  = 4
 };
 
+// 无损合并前问用户之后的选择。
+enum class MergePlan
+{
+    Proceed,      // 不管差异，直接流复制拼（可能坏）
+    Cancel,       // 取消这次导出
+    RemuxFirst,   // 先把各段快速转封装成 MP4（不重编码），再无损拼接
+};
+
 // 命令行扫描窗口的“未指定”哨兵：负数本身是合法的窗口值（= 该侧不限制），
 // 所以不能用 -1 表示“没给”。
 constexpr double kScanUnset = -1e9;
@@ -140,6 +148,9 @@ private:
     // 重新分析单个视频（不影响其它已分析好的结果）
     void StartDetectOne(int index);
     void StartExport(int job);
+    // 无损合并前逐项比对列表里所有参与合并的视频格式；不一致时问用户
+    // “强行合并 / 取消 / 先转封装”。--nogui 下不能弹框，只写日志并放行。
+    MergePlan ConfirmMergeFormats();
     void StartJobInternal(int job, bool detectAll = false, int onlyIndex = -1);
     void CancelJob();
     void JobThreadMain(int job, bool detectAll, int onlyIndex);
@@ -196,6 +207,9 @@ private:
     int                  currentJob_  = JobNone;
     int                  nextJob_     = JobNone;
     std::wstring         lastOutput_;
+    // 由 ConfirmMergeFormats 在 UI 线程上设定，JobThread 里读。决定这次合并要不要
+    // 先转封装。默认 Proceed：“两个都导出”那条路径不经过询问，直接按原样拼。
+    MergePlan            mergePlan_ = MergePlan::Proceed;
     std::wstring         lastOutputDir_;
     // 只分析单个视频时用（-1 = 全量/增量分析），JobThreadMain 读取
     int                  detectOnlyIndex_ = -1;

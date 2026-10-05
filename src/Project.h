@@ -103,8 +103,14 @@ struct VideoItem
     std::wstring summaryText() const;
     // 人类可读的保留区间，例如 "00:00:12.500 - 00:01:03.000"（未选择时为空）
     std::wstring keepRangeText() const;
-    // 画面规格（"HDR10 · 10bit"），未分析时为空；左侧面板单独占一行显示
-    std::wstring formatText() const;
+    // 时间线左侧的技术信息三行（未分析时为空）：
+    //   1920x1080 | VBR | 25fps
+    //   HEVC | Main@L4 | yuv420p
+    //   AAC LC | 2.0 | 48K
+    // 空字段会被跳过（" | | " 这种空洞的写法比缺一项更难看）。
+    std::wstring streamLine() const;      // 分辨率 | 帧率格式 | 帧率
+    std::wstring videoLine() const;       // 视频编码 | 档次@级别 | 像素格式
+    std::wstring audioLine() const;       // 音频编码 | 声道 | 采样率
     // 保留起点 / 终点（秒）。< 0 表示该端还没有指定。
     double keepStartTime() const;
     double keepEndTime() const;
@@ -163,3 +169,30 @@ public:
 // File type helpers
 bool IsSupportedMediaFile(const std::wstring& path);
 std::vector<std::wstring> SupportedMediaExtensions();
+
+// -----------------------------------------------------------------------
+// 无损合并前的格式一致性检查
+//
+// concat 的 stream copy 不会重新编码，参数不一致时不会报错，但播出来的是
+// 花屏 / 断续的声音，所以必须在合并前拦住，逐项告诉用户差在哪。
+// -----------------------------------------------------------------------
+// 一处不一致的字段：label 是显示名（已本地化），values 是列表里出现过的取值。
+struct FormatMismatch
+{
+    std::wstring              label;
+    std::vector<std::wstring> values;
+};
+
+// 逐项比对：视频编码器 / 音频编码器 / 分辨率 / 帧率 / 像素格式 / 编码档次与级别 /
+// 色彩空间 / 音频采样率 / 声道数与声道布局。返回 true 表示全部一致。
+// 某一项在某个视频上 ffprobe 没报出来（空串）时该视频不参与这一项的比较，
+// 免得因为“缺字段”误报不一致。
+bool VideoFormatsMatch(const std::vector<const VideoInfo*>& infos,
+                       std::vector<FormatMismatch>& diffs);
+// 把 diffs 拼成给用户看的提示文本（每行 "· 字段：A / B"）。
+std::wstring DescribeFormatMismatch(const std::vector<FormatMismatch>& diffs);
+
+// diffs 里是否含“转封装就能修好”的差异（封装格式 / 视频时基 / 音频时基 / 流布局）。
+// 这类差异不动码流，只换容器 + 统一时基就能修好，几秒跑完，所以对话框里可以多给
+// 用户一个“快速转封装”选项。真正的编码/分辨率/采样率差异则只能重编码，给了也没用。
+bool MismatchIsRemuxFixable(const std::vector<FormatMismatch>& diffs);

@@ -215,12 +215,16 @@ private:
     bool                      thumbsEnabled_ = true;
     size_t                    cacheLimit_ = 48;
 
-    static const int kLeftPanelW = 210;
+    static const int kLeftPanelW = 250;
     static const int kRulerH     = 22;
     static const int kScrollH    = 16;
     static const int kVScrollW   = 16;
     static const int kRowGap     = 8;
     static const int kMaxTiles   = 8;
-    // 左侧面板四行文字（标题 / 时长·分辨率·fps / 规格 / 已选段）所需的高度
-    static const int kMinRowH    = 72;
+    // 左侧面板四行文字所需的高度：
+    //   1. 视频名
+    //   2. 分辨率 | 帧率格式 | 帧率
+    //   3. 视频编码 | 档次@级别 | 像素格式
+    //   4. 音频编码 | 声道 | 采样率 + 状态（出错时整行换成错误详情）
+    static const int kMinRowH    = 74;
 };

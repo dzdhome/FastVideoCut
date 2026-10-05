@@ -59,6 +59,20 @@ std::wstring JoinArgs(const std::vector<std::wstring>& args);
 // Escape a path so it can be written inside an ffmpeg concat demuxer list.
 std::wstring EscapeConcatPath(const std::wstring& path);
 
+// ------------------------------- text layout -------------------------------
+// Hard-wraps `text` so that no line exceeds `availPx` when drawn with the font
+// currently selected into `dc`. Breaks between characters and joins with CRLF.
+//
+// The log view needs this because it cannot use the EDIT control's own word
+// wrap: a multiline EDIT that wraps its text paints overlapping glyphs as soon
+// as the user scrolls it with the mouse wheel (its wrap cache and the line
+// positions it paints disagree). With ES_AUTOHSCROLL there is no wrap at all,
+// so we break the lines ourselves and one visual line stays one logical line.
+//
+// `dc` must have the target font selected. Returns `text` unchanged when it
+// already fits or when measurement is unavailable.
+std::wstring WrapTextToWidth(HDC dc, const std::wstring& text, int availPx);
+
 // ------------------------------- file helpers ------------------------------
 bool         FileExists(const std::wstring& path);
 bool         DirectoryExists(const std::wstring& path);

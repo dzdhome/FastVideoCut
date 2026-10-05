@@ -360,9 +360,13 @@ void MainWindow::CreateChildren()
     }
 
     // ---- log --------------------------------------------------------------
+    // 这里用 ES_AUTOHSCROLL（= 不自动换行）而不是让它自己换行：多行 EDIT 一旦
+    // 开启自动换行，鼠标滚轮一滚动就会把上下两行画到同一个 y 上（字叠在一起），
+    // 强制重绘也救不回来，是控件换行点缓存的毛病。改成自己按控件宽度硬折行，
+    // 见 AppendLog / WrapTextToWidth。
     log_ = ::CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                              WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE |
-                             ES_AUTOVSCROLL | ES_READONLY | ES_LEFT,
+                             ES_AUTOHSCROLL | ES_READONLY | ES_LEFT,
                              0, 0, 10, 10, hwnd_, (HMENU)IDC_LOG, hInst_, nullptr);
     ::SendMessageW(log_, WM_SETFONT, (WPARAM)fontUi_, TRUE);
     ::SendMessageW(log_, EM_SETLIMITTEXT, (WPARAM)(1 << 20), 0);
@@ -585,6 +589,9 @@ void MainWindow::LayoutChildren()
         }
     }
     ::MoveWindow(log_, 0, logTop, rc.right, logH, TRUE);
+    // 宽度变了就得重新折行：日志控件是关掉自带换行的（见创建处注释），
+    // 不重折的话把窗口拉窄会把每行的尾巴裁掉。
+    RebuildLog();
     ::MoveWindow(help_, 0, helpTop, rc.right, helpH, TRUE);
     ::MoveWindow(status_, 0, statusTop, rc.right - progW - pad, statusH, TRUE);
     ::MoveWindow(progress_, rc.right - progW - pad, statusTop + MulDiv(4, s, 96),
@@ -1111,11 +1118,58 @@ void MainWindow::AppendLog(const std::wstring& text)
 
     WriteLogFile(line);        // --log works even before the log control exists
 
+    // Remember the unwrapped text; RebuildLog needs it after a resize.
+    logLines_.push_back(line);
+    if (logLines_.size() > 4000) logLines_.erase(logLines_.begin(), logLines_.begin() + 2000);
+
     if (!log_) return;
-    std::wstring line2 = line + L"\r\n";
+
+    // Hard-wrap ourselves: the control has ES_AUTOHSCROLL (no wrap) because a
+    // multiline EDIT that wraps its own text paints overlapping glyphs as soon
+    // as it is scrolled. Minus a few px so the last glyph never touches the
+    // border and gets clipped.
+    RECT cr;
+    ::GetClientRect(log_, &cr);
+    const int avail = (cr.right - cr.left) - 8;
+
+    HDC dc = ::GetDC(log_);
+    std::wstring body = WrapTextToWidth(dc, line, avail);
+    if (dc) ::ReleaseDC(log_, dc);
+
+    std::wstring add = body + L"\r\n";
     int len = ::GetWindowTextLengthW(log_);
     ::SendMessageW(log_, EM_SETSEL, (WPARAM)len, (LPARAM)len);
-    ::SendMessageW(log_, EM_REPLACESEL, FALSE, (LPARAM)line2.c_str());
+    ::SendMessageW(log_, EM_REPLACESEL, FALSE, (LPARAM)add.c_str());
+    ::SendMessageW(log_, EM_SCROLLCARET, 0, 0);
+}
+
+void MainWindow::RebuildLog()
+{
+    if (!log_) return;
+
+    RECT cr;
+    ::GetClientRect(log_, &cr);
+    const int avail = (cr.right - cr.left) - 8;
+
+    // Dragging the window edge fires WM_SIZE per pixel; re-wrapping thousands
+    // of lines every time would make resizing stutter. Width is the only thing
+    // the wrap depends on, so skip the work when it has not changed.
+    if (avail == logWrapWidth_) return;
+    logWrapWidth_ = avail;
+
+    HDC dc = ::GetDC(log_);
+    std::wstring all;
+    all.reserve(logLines_.size() * 60);
+    for (const std::wstring& l : logLines_)
+    {
+        all += WrapTextToWidth(dc, l, avail);
+        all += L"\r\n";
+    }
+    if (dc) ::ReleaseDC(log_, dc);
+
+    ::SetWindowTextW(log_, all.c_str());
+    int len = ::GetWindowTextLengthW(log_);
+    ::SendMessageW(log_, EM_SETSEL, (WPARAM)len, (LPARAM)len);
     ::SendMessageW(log_, EM_SCROLLCARET, 0, 0);
 }
 

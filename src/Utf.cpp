@@ -89,6 +89,52 @@ std::wstring FormatString(const wchar_t* fmt, ...)
 // ---------------------------------------------------------------------------
 // command line
 // ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------
+// text layout
+// -----------------------------------------------------------------------
+std::wstring WrapTextToWidth(HDC dc, const std::wstring& text, int availPx)
+{
+    if (text.empty() || availPx <= 0 || !dc) return text;
+
+    // GetTextExtentExPointW reports how many leading characters fit within
+    // availPx, which is exactly the break point we want.
+    SIZE whole{};
+    if (::GetTextExtentPoint32W(dc, text.c_str(), (int)text.size(), &whole) &&
+        whole.cx <= availPx)
+    {
+        return text;                       // already fits, nothing to do
+    }
+
+    std::wstring out;
+    out.reserve(text.size() + text.size() / 40 + 16);
+
+    const size_t n = text.size();
+    size_t pos = 0;
+    while (pos < n)
+    {
+        int fit = 0;
+        ::GetTextExtentExPointW(dc, text.c_str() + pos, (int)(n - pos), availPx,
+                                &fit, nullptr, nullptr);
+        if (fit <= 0) fit = 1;              // never spin forever on a zero-width case
+
+        // Never split a surrogate pair, or the next line would start with a
+        // lone low surrogate and render as tofu.
+        if (fit > 1 && pos + (size_t)fit < n &&
+            (text[pos + (size_t)fit - 1] & 0xFC00) == 0xD800)
+        {
+            --fit;
+        }
+
+        out.append(text, pos, (size_t)fit);
+        pos += (size_t)fit;
+        if (pos < n) out += L"\r\n";
+    }
+    return out;
+}
+
+// -----------------------------------------------------------------------
+// command line
+// -----------------------------------------------------------------------
 std::wstring QuoteArg(const std::wstring& arg)
 {
     bool needQuote = arg.empty();

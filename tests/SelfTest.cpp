@@ -90,6 +90,87 @@ int wmain(int argc, wchar_t** argv)
     Check(ParseTimecode(L"12.5", t) && Nearly(t, 12.5, 1e-6), "ParseTimecode seconds");
     Check(EscapeConcatPath(L"C:\\a b\\c.mp4") == L"file 'C:\\a b\\c.mp4'", "EscapeConcatPath");
 
+    // ---- WrapTextToWidth: the log view cannot use the EDIT control's own word
+    //      wrap (it paints overlapping glyphs once you scroll it), so lines are
+    //      broken by hand. Every visual line must actually fit the width.
+    {
+        HDC dc = ::GetDC(nullptr);
+        HFONT fnt = ::CreateFontW(-13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                  CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
+        HFONT old = fnt ? (HFONT)::SelectObject(dc, fnt) : nullptr;
+
+        Check(dc != nullptr && old != nullptr, "WrapTextToWidth: test font ready");
+
+        if (dc && old)
+        {
+            // fits -> returned untouched (no CRLF added)
+            Check(WrapTextToWidth(dc, L"short line", 2000) == L"short line",
+                  "wrap: a line that already fits is untouched");
+
+            // too long -> broken, and every piece really fits
+            std::wstring long1;
+            for (int i = 0; i < 200; ++i) long1 += L"x";
+            const std::wstring w = WrapTextToWidth(dc, long1, 200);
+            Check(w.find(L"\r\n") != std::wstring::npos, "wrap: a long line is broken",
+                  FormatString(L"%d chars in", (int)w.size()));
+
+            std::vector<std::wstring> pieces;
+            size_t at = 0;
+            while (at < w.size())
+            {
+                size_t nl = w.find(L"\r\n", at);
+                if (nl == std::wstring::npos) { pieces.push_back(w.substr(at)); break; }
+                pieces.push_back(w.substr(at, nl - at));
+                at = nl + 2;
+            }
+            bool allFit = true, noneEmpty = true;
+            for (const std::wstring& p : pieces)
+            {
+                SIZE sz{};
+                ::GetTextExtentPoint32W(dc, p.c_str(), (int)p.size(), &sz);
+                if (sz.cx > 200) allFit = false;
+                if (p.empty()) noneEmpty = false;
+            }
+            Check(allFit, "wrap: every produced line is within the width",
+                  FormatString(L"%d pieces", (int)pieces.size()));
+            Check(noneEmpty, "wrap: no empty pieces");
+
+            // nothing lost: joining the pieces reproduces the input exactly
+            std::wstring joined;
+            for (const std::wstring& p : pieces) joined += p;
+            Check(joined == long1, "wrap: no characters are dropped or added");
+
+            // CJK is double width, so the same pixel budget fits fewer glyphs
+            std::wstring cjk;
+            for (int i = 0; i < 120; ++i) cjk += L"\u9ed1\u5c4f";   // 黑屏
+            const std::wstring cw = WrapTextToWidth(dc, cjk, 200);
+            Check(cw != cjk && cw.find(L"\r\n") != std::wstring::npos,
+                  "wrap: CJK is measured at double width");
+            std::wstring cjoined;
+            at = 0;
+            while (at < cw.size())
+            {
+                size_t nl = cw.find(L"\r\n", at);
+                if (nl == std::wstring::npos) { cjoined += cw.substr(at); break; }
+                cjoined += cw.substr(at, nl - at);
+                at = nl + 2;
+            }
+            Check(cjoined == cjk, "wrap: CJK survives the wrap intact");
+
+            // degenerate input must not hang or throw
+            Check(WrapTextToWidth(dc, long1, 0) == long1, "wrap: zero width -> untouched");
+            Check(WrapTextToWidth(dc, long1, -5) == long1, "wrap: negative width -> untouched");
+            Check(WrapTextToWidth(dc, L"", 100).empty(), "wrap: empty stays empty");
+            Check(!WrapTextToWidth(dc, long1, 1).empty(), "wrap: absurdly narrow width still returns");
+
+            ::SelectObject(dc, old);
+        }
+        if (fnt) ::DeleteObject(fnt);
+        ::ReleaseDC(nullptr, dc);
+    }
+
     // ---- merged output name: first + last video, shared prefix written once ---
     Check(MakeMergeName(L"001", L"010") == L"001-010.mp4",
           "001 + 010 -> 001-010.mp4", MakeMergeName(L"001", L"010"));

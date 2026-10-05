@@ -98,7 +98,9 @@ foreach ($n in 'Utf', 'Process', 'Ffmpeg', 'Project', 'Loc') {
 }
 # SelfTest stays at -O2 with exceptions: no GUI, so strip/LTO buys nothing
 # and readable assertion output is worth more than a few KB.
-Invoke-Tool $gxx (@('-std=c++17', '-Wall', '-Wextra', '-municode', '-O2') + $static + @('-o', $st) + $stSrc) 'SelfTest build' | Out-Null
+# -lgdi32 for WrapTextToWidth's text measuring; it must follow the sources,
+# otherwise the static linker drops it.
+Invoke-Tool $gxx (@('-std=c++17', '-Wall', '-Wextra', '-municode', '-O2') + $static + @('-o', $st) + $stSrc + @('-lgdi32')) 'SelfTest build' | Out-Null
 
 $sz = [math]::Round((Get-Item $gui).Length / 1KB)
 Write-Host ("OK  FastVideoCut.exe {0} KB   SelfTest.exe {1} KB" -f $sz, [math]::Round((Get-Item $st).Length / 1KB))

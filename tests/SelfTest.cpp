@@ -171,6 +171,64 @@ int wmain(int argc, wchar_t** argv)
         ::ReleaseDC(nullptr, dc);
     }
 
+    // ---- same thing, but measured against a WINDOW dc. This is the one that
+        //      actually broke: GetTextExtentExPointW silently fails on a window DC,
+        //      so the old code fell back to "one glyph per line" and the log turned
+        //      into a wall of single characters.
+        {
+            HWND wnd = ::CreateWindowExW(0, L"STATIC", L"", WS_OVERLAPPEDWINDOW,
+                                         0, 0, 300, 200, nullptr, nullptr, nullptr, nullptr);
+            Check(wnd != nullptr, "wrap: window dc created");
+            if (wnd)
+            {
+                HDC wdc = ::GetDC(wnd);
+                HFONT fnt = ::CreateFontW(-13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                          DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
+                HFONT old = fnt ? (HFONT)::SelectObject(wdc, fnt) : nullptr;
+
+                std::wstring src;
+                for (int i = 0; i < 40; ++i)
+                    src += L"extra-0" + std::to_wstring(i) + L"-WWWWWWWWWWWWWWWWWWWWWW.mp4: 00:00:05 | 320x180 | 25fps | ";
+
+                const std::wstring wrapped = WrapTextToWidth(wdc, src, 900);
+
+                // it must break into a handful of lines, not one glyph per line
+                int pieces = 1;
+                for (size_t i = 0; i < wrapped.size(); ++i)
+                    if (wrapped[i] == L'\n') ++pieces;
+                const int ceiling = (int)(src.size() / 40) + 4;
+                Check(pieces < ceiling,
+                      "wrap on a window dc does not degenerate to one glyph per line",
+                      FormatString(L"%d pieces for %d chars", pieces, (int)src.size()));
+
+                // nothing lost, and every piece really fits
+                std::wstring joined;
+                int fits = 1;
+                size_t at = 0;
+                while (at < wrapped.size())
+                {
+                    const size_t nl = wrapped.find(L"\r\n", at);
+                    const std::wstring piece = (nl == std::wstring::npos)
+                                             ? wrapped.substr(at) : wrapped.substr(at, nl - at);
+                    joined += piece;
+                    SIZE sz{};
+                    ::GetTextExtentPoint32W(wdc, piece.c_str(), (int)piece.size(), &sz);
+                    if (sz.cx > 900) fits = 0;
+                    if (nl == std::wstring::npos) break;
+                    at = nl + 2;
+                }
+                Check(fits, "wrap on a window dc keeps every piece within the width");
+                Check(joined == src, "wrap on a window dc loses nothing");
+
+                if (old) ::SelectObject(wdc, old);
+                if (fnt) ::DeleteObject(fnt);
+                ::ReleaseDC(wnd, wdc);
+                ::DestroyWindow(wnd);
+            }
+        }
+
     // ---- merged output name: first + last video, shared prefix written once ---
     Check(MakeMergeName(L"001", L"010") == L"001-010.mp4",
           "001 + 010 -> 001-010.mp4", MakeMergeName(L"001", L"010"));

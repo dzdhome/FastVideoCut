@@ -28,6 +28,7 @@
 #include "Settings.h"
 #include "Timeline.h"
 #include "Preview.h"
+#include "LogView.h"
 #include "Messages.h"
 #include "resource.h"
 
@@ -162,11 +163,6 @@ private:
 
     // ---- ui helpers ------------------------------------------------------
     void AppendLog(const std::wstring& text);
-    // Re-wraps every buffered line for the current log width and rewrites the
-    // control. Needed because the log view turns the EDIT control's own word
-    // wrap off (it draws overlapping glyphs once you scroll it), so the wrap
-    // has to be redone by hand whenever the window changes size.
-    void RebuildLog();
     void WriteLogFile(const std::wstring& text);   // --log <file> mirror
     void Notify(const std::wstring& text, UINT flags);   // MessageBox, or just a log line in --nogui
     void SetStatus(const std::wstring& text);
@@ -183,7 +179,6 @@ private:
     HINSTANCE    hInst_     = nullptr;
     HWND         hwnd_      = nullptr;
     HWND         list_      = nullptr;
-    HWND         log_       = nullptr;
     HMENU        viewMenu_  = nullptr;      // 视图菜单（切换时要更新勾选状态）
     HMENU        vidMenu_   = nullptr;      // 视频菜单（要按任务状态禁用“重新分析选中的视频”）
     std::wstring logFilePath_;
@@ -204,6 +199,7 @@ private:
     AppSettings  settings_;
     TimelineView timeline_;
     PreviewPane  preview_;
+    LogView      logView_;        // 自绘日志面板（曾经是 EDIT 控件，见 LogView.h）
     AppArgs      args_;
 
     std::thread          worker_;
@@ -220,13 +216,6 @@ private:
     int                  detectOnlyIndex_ = -1;
     bool                 debugLog_    = false;
     bool                 settingsDirty_ = false;
-
-    // Log lines exactly as they were logged (unwrapped). Kept so RebuildLog can
-    // re-wrap them for a new width without the old hard breaks baked in.
-    std::vector<std::wstring> logLines_;
-    // Width logLines_ is currently wrapped for. WM_SIZE fires on every pixel of
-    // a drag-resize, and re-wrapping thousands of lines each time would stutter.
-    int                         logWrapWidth_ = 0;
 
     HFONT        fontUi_    = nullptr;
     HBRUSH       bgBrush_   = nullptr;

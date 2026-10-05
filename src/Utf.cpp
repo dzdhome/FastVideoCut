@@ -112,21 +112,36 @@ std::wstring WrapTextToWidth(HDC dc, const std::wstring& text, int availPx)
     size_t pos = 0;
     while (pos < n)
     {
-        int fit = 0;
-        ::GetTextExtentExPointW(dc, text.c_str() + pos, (int)(n - pos), availPx,
-                                &fit, nullptr, nullptr);
-        if (fit <= 0) fit = 1;              // never spin forever on a zero-width case
-
-        // Never split a surrogate pair, or the next line would start with a
-        // lone low surrogate and render as tofu.
-        if (fit > 1 && pos + (size_t)fit < n &&
-            (text[pos + (size_t)fit - 1] & 0xFC00) == 0xD800)
+        // Binary-search the break point with GetTextExtentPoint32W rather than
+        // GetTextExtentExPointW: the latter returns FALSE on a window DC (it
+        // works on a screen DC, which is what the unit test happens to use) and
+        // then leaves lpnFit untouched, so every line degenerates to one glyph
+        // per row. GetTextExtentPoint32W is reliable on both.
+        size_t lo = 1, hi = n - pos, best = 1;
+        while (lo <= hi)
         {
-            --fit;
+            const size_t mid = lo + (hi - lo) / 2;
+            SIZE s{};
+            if (::GetTextExtentPoint32W(dc, text.c_str() + pos, (int)mid, &s) && s.cx <= availPx)
+            {
+                best = mid;
+                lo = mid + 1;
+            }
+            else
+            {
+                if (mid == 1) { best = 1; break; }     // even one glyph is too wide
+                hi = mid - 1;
+            }
         }
 
-        out.append(text, pos, (size_t)fit);
-        pos += (size_t)fit;
+        size_t take = best;
+        // Never split a surrogate pair, or the next line would start with a
+        // lone low surrogate and render as tofu.
+        if (take > 1 && pos + take < n && (text[pos + take - 1] & 0xFC00) == 0xD800)
+            --take;
+
+        out.append(text, pos, take);
+        pos += take;
         if (pos < n) out += L"\r\n";
     }
     return out;

@@ -62,16 +62,17 @@ END
 // 智能合并（先转封装再无损合并，推荐）→ 取消合并 → 强行合并。
 // 文字在运行时按界面语言改写，模板里只是占位。
 // 对话框高度按“最坏情况”留的余量：两按钮模式下最多 9~10 条差异，
-    // 加上开头说明大约 14 行，所以文本区留 ~15 行的高度。
-IDD_MERGEASK DIALOG 0, 0, 340, 160
+    // 加上开头说明文本区要留 ~14 行；底下再放 3 行操作说明 + 按钮。
+IDD_MERGEASK DIALOG 0, 0, 340, 188
 STYLE DS_SETFONT|DS_MODALFRAME|DS_CENTER|WS_POPUP|WS_CAPTION|WS_SYSMENU
 CAPTION "FastVideoCut"
 FONT 9, "Microsoft YaHei UI"
 BEGIN
     // 图标放在标题栏（WM_SETICON），对话框体内不再画大图标：SS_ICON 静态控件
     // 在这里实测画不出来（控件样式、大小、位置都对，图标句柄也设上了，就是不绘）。
-    LTEXT        "", IDC_MERGE_TEXT,  12,  8, 316, 115
-    PUSHBUTTON   "智能合并", IDC_MERGE_SMART,  12, 132, 100, 18
-    PUSHBUTTON   "取消合并", IDC_MERGE_CANCEL, 120, 132, 100, 18
-    PUSHBUTTON   "强行合并", IDC_MERGE_ANYWAY, 228, 132, 100, 18
+    LTEXT        "", IDC_MERGE_TEXT,  12,   8, 316, 110
+    LTEXT        "", IDC_MERGE_HINT,  12, 122, 316,  34
+    PUSHBUTTON   "智能合并", IDC_MERGE_SMART,  12, 162, 100, 18
+    PUSHBUTTON   "取消合并", IDC_MERGE_CANCEL, 120, 162, 100, 18
+    PUSHBUTTON   "强行合并", IDC_MERGE_ANYWAY, 228, 162, 100, 18
 END

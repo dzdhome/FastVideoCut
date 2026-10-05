@@ -111,6 +111,7 @@
 #define IDC_MERGE_SMART       42051   // 最左：先转封装再无损合并
 #define IDC_MERGE_CANCEL      42052   // 中间：取消合并
 #define IDC_MERGE_ANYWAY      42053   // 最右：不管差异，直接流复制拼
+#define IDC_MERGE_HINT        42055   // 按钮正上方的操作说明
 
 // 设置对话框里的静态标签。切换界面语言时要用 SetDlgItemText 改写文字，
 // 所以每个标签都得有 ID（原来都是 -1）。

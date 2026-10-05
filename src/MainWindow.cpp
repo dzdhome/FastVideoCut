@@ -1679,6 +1679,20 @@ namespace
                 ::SetWindowTextW(smart,  TR(L"智能合并", L"Merge smartly"));
                 ::SetWindowTextW(cancel, TR(L"取消合并", L"Cancel merge"));
                 ::SetWindowTextW(anyway, TR(L"强行合并", L"Merge anyway"));
+
+                // 光有「智能合并」四个字看不出它到底做什么（是重编码吗？会覆盖源文件吗？
+                // 要等多久？），所以在按钮正上方把每个按钮的后果写清楚。
+                // 只列出当前真实存在的按钮：两按钮模式下就不该出现「智能合并」那行。
+                ::SetDlgItemTextW(dlg, IDC_MERGE_HINT,
+                    TR(L"· 智能合并：自动转封装统一成 MP4（不重编码，几秒即可），再无损拼接，源文件不动\n"
+                       L"· 取消合并：放弃这次导出，不生成任何文件\n"
+                       L"· 强行合并：直接拼接，导出文件的时长会算错",
+                       L"· Smart merge: remux to MP4 (no re-encoding, takes seconds), then merge\n"
+                       L"  losslessly; your source files are not touched\n"
+                       L"· Cancel merge: abandon this export, no file is produced\n"
+                       L"· Merge anyway: concatenate directly; the duration will come out wrong")
+                );
+
                 // 回车 = 推荐做法，转封装只换容器不重编码，几秒就好
                 ::SetFocus(smart);
                 ::SendMessageW(dlg, DM_SETDEFID, IDC_MERGE_SMART, 0);
@@ -1695,6 +1709,13 @@ namespace
                 MoveTo(anyway, pCancel.x, pCancel.y);
                 ::SetWindowTextW(cancel, TR(L"取消合并", L"Cancel merge"));
                 ::SetWindowTextW(anyway, TR(L"强行合并", L"Merge anyway"));
+                ::SetDlgItemTextW(dlg, IDC_MERGE_HINT,
+                    TR(L"· 取消合并：放弃这次导出，不生成任何文件\n"
+                       L"· 强行合并：直接拼接，导出文件会花屏或断音",
+                       L"· Cancel merge: abandon this export, no file is produced\n"
+                       L"· Merge anyway: concatenate directly; the result will have corrupted\n"
+                       L"  video or broken audio")
+                );
                 // 这次两个按钮都不该是默认动作，回车 = 安全地取消
                 ::SetFocus(cancel);
                 ::SendMessageW(dlg, DM_SETDEFID, IDC_MERGE_CANCEL, 0);

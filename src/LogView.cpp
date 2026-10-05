@@ -36,8 +36,14 @@ bool LogView::Create(HWND owner, int id, HINSTANCE inst)
     wc.lpszClassName = ClassName();
     ::RegisterClassExW(&wc);                    // harmless if already registered
 
+    // WS_CLIPCHILDREN: never paint over our own children.
+    // WS_CLIPSIBLINGS: when the timeline or the preview pane overlaps this
+    // rect and repaints, it must not smear into here. The main window already
+    // carries WS_CLIPCHILDREN, but the pane protects itself too - cheap, and
+    // that kind of smear looks exactly like "text piled on text".
     view_ = ::CreateWindowExW(WS_EX_CLIENTEDGE, ClassName(), L"",
-                              WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPCHILDREN,
+                              WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                              WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                               0, 0, 10, 10, owner, (HMENU)(INT_PTR)id, inst, this);
     return view_ != nullptr;
 }
@@ -224,12 +230,22 @@ void LogView::OnPaint()
     RECT rc;
     ::GetClientRect(view_, &rc);
 
+    // Always repaint the whole client area before drawing any glyph. Every
+    // invalidate in this control (append, scroll, re-wrap) covers the full
+    // window, but erasing unconditionally here means a stale line can never
+    // survive underneath a scrolled-to one - that is what "characters piled on
+    // top of each other" looks like.
     ::FillRect(dc, &rc, (HBRUSH)::GetStockObject(WHITE_BRUSH));
 
     if (lineH_ <= 0) ComputeMetrics();
 
     HFONT old = PickFont(dc);
+    // TRANSPARENT is deliberate and safe *because* of the full-area FillRect
+    // above: the glyph backgrounds are already white. SetBkColor is kept in
+    // sync with that fill anyway, so switching the mode to OPAQUE later could
+    // not introduce a colour mismatch.
     ::SetBkMode(dc, TRANSPARENT);
+    ::SetBkColor(dc, RGB(255, 255, 255));
 
     const size_t a = std::min(selFrom_, selTo_);
     const size_t b = std::max(selFrom_, selTo_);

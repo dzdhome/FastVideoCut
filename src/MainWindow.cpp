@@ -807,10 +807,14 @@ LRESULT MainWindow::WndProc(UINT msg, WPARAM wp, LPARAM lp)
     {
         HDC dc = (HDC)wp;
         HWND ctl = (HWND)lp;
-        ::SetBkMode(dc, TRANSPARENT);
         if (ctl == status_ || ctl == help_)
         {
+            ::SetBkMode(dc, TRANSPARENT);
             ::SetTextColor(dc, RGB(198, 204, 214));
+            // Kept identical to bgBrush_ on purpose: with TRANSPARENT the colour
+            // itself is unused, but if anyone flips the mode to OPAQUE a mismatch
+            // between this and the returned brush is exactly how a stale line
+            // ends up surviving a repaint.
             ::SetBkColor(dc, RGB(24, 26, 31));
             return (LRESULT)bgBrush_;
         }

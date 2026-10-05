@@ -103,6 +103,15 @@
 #define IDC_SET_LANG           42028   // 界面语言
 #define IDC_SET_THUMBS         42029   // 生成视频流缩略图
 
+// ---- merge pre-check dialog ------------------------------------------------
+// MessageBoxW 的按钮文字和顺序是写死的，没法把“智能合并”放到最左边，
+// 所以这个对话框自己画一个模板（见 settings.rc 的 IDD_MERGEASK）。
+#define IDD_MERGEASK          42003
+#define IDC_MERGE_TEXT        42050
+#define IDC_MERGE_SMART       42051   // 最左：先转封装再无损合并
+#define IDC_MERGE_CANCEL      42052   // 中间：取消合并
+#define IDC_MERGE_ANYWAY      42053   // 最右：不管差异，直接流复制拼
+
 // 设置对话框里的静态标签。切换界面语言时要用 SetDlgItemText 改写文字，
 // 所以每个标签都得有 ID（原来都是 -1）。
 #define IDC_SET_LB_FFDIR       42030

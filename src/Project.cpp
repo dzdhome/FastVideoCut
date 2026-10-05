@@ -748,18 +748,24 @@ std::wstring DescribeFormatMismatch(const std::vector<FormatMismatch>& diffs)
 
 bool MismatchIsRemuxFixable(const std::vector<FormatMismatch>& diffs)
 {
+    if (diffs.empty()) return false;     // 没有差异谈不上“可修复”
+
     // 标签在 VideoFormatsMatch 里写死，这里按同样的 TR() 取一遍再比。不能在
     // 命名空间里存成常量：TR() 依赖 Loc::Apply() 的运行期结果，静态初始化早于它。
     const wchar_t* fixable[] = { TR(L"封装格式",   L"Container"),
                                  TR(L"视频时基",   L"Video time base"),
                                  TR(L"音频时基",   L"Audio time base"),
                                  TR(L"流布局",     L"Stream layout") };
+    // 必须“全部”差异都是容器层面的才给出“智能合并”：只要掺进一个分辨率/编码
+    // 上的差异，转封装就修不好它，此时还推荐“智能合并”是在骗用户。
     for (size_t i = 0; i < diffs.size(); ++i)
     {
+        bool isContainerOnly = false;
         for (size_t k = 0; k < sizeof(fixable) / sizeof(fixable[0]); ++k)
         {
-            if (diffs[i].label == fixable[k]) return true;
+            if (diffs[i].label == fixable[k]) { isContainerOnly = true; break; }
         }
+        if (!isContainerOnly) return false;
     }
-    return false;
+    return true;
 }

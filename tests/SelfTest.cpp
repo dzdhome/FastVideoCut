@@ -828,6 +828,21 @@ int wmain(int argc, wchar_t** argv)
         Check(!MismatchIsRemuxFixable(diffs),
               "a plain codec difference is not offered as remux-fixable");
 
+        // 混在一起时必须整体否掉：只要掺一个分辨率/编码差异，转封装就修不好，
+        // 这时还推荐“智能合并”是在骗用户
+        o = a; o.container = "matroska,webm"; o.videoTimeBase = "1/1000";
+        o.width = 1280; o.height = 720;
+        pair.clear(); pair.push_back(&a); pair.push_back(&o);
+        VideoFormatsMatch(pair, diffs);
+        Check(diffs.size() == 3, "container, time base and resolution are all reported",
+              FormatString(L"%d", (int)diffs.size()));
+        Check(!MismatchIsRemuxFixable(diffs),
+              "a resolution difference spoils the remux option even when the container also differs");
+
+        std::vector<FormatMismatch> none;
+        Check(!MismatchIsRemuxFixable(none),
+              "no difference at all is not 'remux fixable'");
+
         Loc::Apply(Loc::Configured());
     }
 

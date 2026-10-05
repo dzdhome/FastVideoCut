@@ -1626,6 +1626,101 @@ void MainWindow::StartDetectOne(int index)
     StartJobInternal(JobDetect, true, index);
 }
 
+// 合并前的确认框。MessageBoxW 的按钮文字和排列顺序是系统写死的，没法把
+// “智能合并”放到最左边，所以自己画一个对话框模板（settings.rc）。
+// 两个模式共用一个模板：remuxFixable = false 时把“智能合并”藏掉，
+// 剩下两个按钮往左挪，占住原来的位置。
+namespace
+{
+    struct MergeAskCtx
+    {
+        const std::wstring* text;
+        bool                 remuxFixable;
+    };
+
+    // 把一个子控件挪到客户区里的某个位置
+    void MoveTo(HWND ctl, int x, int y)
+    {
+        ::SetWindowPos(ctl, nullptr, x, y, 0, 0,
+                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    // 读出控件在对话框客户区里的左上角
+    POINT ClientTopLeft(HWND dlg, HWND ctl)
+    {
+        RECT rc;
+        ::GetWindowRect(ctl, &rc);
+        POINT p = { rc.left, rc.top };
+        ::ScreenToClient(dlg, &p);
+        return p;
+    }
+
+    INT_PTR CALLBACK MergeAskProc(HWND dlg, UINT uMsg, WPARAM wp, LPARAM lp)
+    {
+        switch (uMsg)
+        {
+        case WM_INITDIALOG:
+        {
+            MergeAskCtx* c = (MergeAskCtx*)lp;
+            if (c && c->text)
+                ::SetDlgItemTextW(dlg, IDC_MERGE_TEXT, c->text->c_str());
+
+            // 警告图标放标题栏（体内那个 SS_ICON 静态控件实测画不出来，见 settings.rc 注释）
+            ::SendMessageW(dlg, WM_SETICON, ICON_BIG,
+                           (LPARAM)::LoadIconW(nullptr, IDI_WARNING));
+
+            HWND smart  = ::GetDlgItem(dlg, IDC_MERGE_SMART);
+            HWND cancel = ::GetDlgItem(dlg, IDC_MERGE_CANCEL);
+            HWND anyway = ::GetDlgItem(dlg, IDC_MERGE_ANYWAY);
+
+            const bool canRemux = (c && c->remuxFixable);
+            if (canRemux)
+            {
+                ::SetWindowTextW(smart,  TR(L"智能合并", L"Merge smartly"));
+                ::SetWindowTextW(cancel, TR(L"取消合并", L"Cancel merge"));
+                ::SetWindowTextW(anyway, TR(L"强行合并", L"Merge anyway"));
+                // 回车 = 推荐做法，转封装只换容器不重编码，几秒就好
+                ::SetFocus(smart);
+                ::SendMessageW(dlg, DM_SETDEFID, IDC_MERGE_SMART, 0);
+            }
+            else
+            {
+                // 只有编码参数不一致时，转封装解决不了，给了也是骗人
+                ::ShowWindow(smart, SW_HIDE);
+                // 两个按钮各占“智能合并”和自己原来的位置：既顶到最左边，
+                // 又不会在中间留一个大空洞（只挪“取消合并”会留下 ~200px 空白）
+                const POINT pSmart = ClientTopLeft(dlg, smart);
+                const POINT pCancel = ClientTopLeft(dlg, cancel);
+                MoveTo(cancel, pSmart.x, pSmart.y);
+                MoveTo(anyway, pCancel.x, pCancel.y);
+                ::SetWindowTextW(cancel, TR(L"取消合并", L"Cancel merge"));
+                ::SetWindowTextW(anyway, TR(L"强行合并", L"Merge anyway"));
+                // 这次两个按钮都不该是默认动作，回车 = 安全地取消
+                ::SetFocus(cancel);
+                ::SendMessageW(dlg, DM_SETDEFID, IDC_MERGE_CANCEL, 0);
+            }
+            return TRUE;
+        }
+
+        case WM_COMMAND:
+            switch (LOWORD(wp))
+            {
+            case IDC_MERGE_SMART:
+            case IDC_MERGE_CANCEL:
+            case IDC_MERGE_ANYWAY:
+                ::EndDialog(dlg, LOWORD(wp));
+                return TRUE;
+            }
+            break;
+
+        case WM_CLOSE:
+            ::EndDialog(dlg, IDC_MERGE_CANCEL);   // 关窗等同取消合并
+            return TRUE;
+        }
+        return FALSE;
+    }
+}
+
 // 无损合并前逐项比对参与合并的视频格式。返回用户的选择：
 //   · Proceed     —— 差异可以接受（或差异只在容器层面且用户不想转封装），照常合并
 //   · Cancel      —— 取消这次导出
@@ -1652,38 +1747,31 @@ MergePlan MainWindow::ConfirmMergeFormats()
 
     const std::wstring list = DescribeFormatMismatch(diffs);
 
-    // 差异全是容器/时基/布局这类时，多给一条“快速转封装”的出路：只换容器不重编码，
+    // 差异全是容器/时基/布局这类时，多给一条“智能合并”的出路：只换容器不重编码，
     // 几秒就能让 concat 对上时基。真正的编码/分辨率差异只能重编码，给了也没用。
-    if (MismatchIsRemuxFixable(diffs))
-    {
-        AppendLog(std::wstring(TR(L"合并前检查：以下差异会让无损拼接算错时间轴 ——", L"Merge pre-check: these differences would corrupt the timeline of a stream-copy merge:")) +
-                  L"\n" + list);
-        std::wstring msg = std::wstring(TR(L"列表里的视频封装格式或时基不一致。直接无损合并会算错时间轴：\n"
-                                           L"导出文件的时长会比实际长很多，超出的部分没有内容、播不出来。\n\n",
-                                           L"The videos in the list have different containers or time bases. Merging them with a plain "
-                                           L"lossless copy computes a wrong timeline:\n"
-                                           L"the exported file will be far longer than the real content, and the extra part will "
-                                           L"not play.\n\n"))
-                             + list + L"\n\n"
-                             + TR(L"是：强行合并\n否：取消合并\n取消：先把 MKV 等格式快速转封装成 MP4（不重编码，几秒即可），再无损合并",
-                                L"Yes: merge anyway\nNo: cancel the merge\nCancel: first quickly remux the MKV & co. to MP4 "
-                                L"(no re-encoding, takes seconds), then merge losslessly");
-        int r = ::MessageBoxW(hwnd_, msg.c_str(), L"FastVideoCut",
-                              MB_ICONWARNING | MB_YESNOCANCEL);
-        if (r == IDCANCEL) return MergePlan::RemuxFirst;
-        if (r == IDNO)     return MergePlan::Cancel;
-        return MergePlan::Proceed;
-    }
+    const bool canRemux = MismatchIsRemuxFixable(diffs);
 
-    // 原来的两选一：编码参数真的不一样，流复制拼出来就是花屏/断音。
-    AppendLog(std::wstring(TR(L"合并前检查：以下格式不一致 ——", L"Merge pre-check: these formats do not match:")) + L"\n" + list);
-    std::wstring msg2 = std::wstring(TR(L"列表里的视频格式不一致，直接无损合并会花屏或断音：\n\n",
-                                        L"The videos in the list do not match; merging them with a plain lossless copy will produce "
-                                        "corrupted video or broken audio:\n\n"))
-                        + list + L"\n\n"
-                        + TR(L"是否仍然强行合并？", L"Merge anyway?");
-    int r = ::MessageBoxW(hwnd_, msg2.c_str(), L"FastVideoCut", MB_ICONWARNING | MB_YESNO);
-    return (r == IDYES) ? MergePlan::Proceed : MergePlan::Cancel;
+    std::wstring msg = canRemux
+        ? std::wstring(TR(L"列表里的视频封装格式或时基不一致，直接无损合并会算错时间轴：\n"
+                          L"导出文件的时长会比实际长很多，超出的部分没有内容、播不出来。",
+                          L"The videos in the list have different containers or time bases. A plain lossless merge "
+                          L"computes a wrong timeline: the exported file will be far longer than the real content, "
+                          L"and the extra part will not play."))
+        : std::wstring(TR(L"列表里的视频格式不一致，直接无损合并会花屏或断音。",
+                          L"The videos in the list do not match; merging them with a plain lossless copy will produce "
+                          L"corrupted video or broken audio."));
+    msg += L"\n\n" + list;
+
+    AppendLog(std::wstring(TR(L"合并前检查：", L"Merge pre-check: ")) + list);
+
+    MergeAskCtx ctx{ &msg, canRemux };
+    INT_PTR r = ::DialogBoxParamW(::GetModuleHandleW(nullptr),
+                                  MAKEINTRESOURCEW(IDD_MERGEASK), hwnd_,
+                                  MergeAskProc, (LPARAM)&ctx);
+
+    if (r == IDC_MERGE_SMART)  return MergePlan::RemuxFirst;
+    if (r == IDC_MERGE_ANYWAY) return MergePlan::Proceed;
+    return MergePlan::Cancel;      // 取消合并，或直接关了窗口
 }
 
 void MainWindow::StartExport(int job)

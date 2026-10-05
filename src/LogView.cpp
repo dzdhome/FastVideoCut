@@ -45,7 +45,32 @@ bool LogView::Create(HWND owner, int id, HINSTANCE inst)
                               WS_CHILD | WS_VISIBLE | WS_TABSTOP |
                               WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                               0, 0, 10, 10, owner, (HMENU)(INT_PTR)id, inst, this);
-    return view_ != nullptr;
+    if (!view_) return false;
+
+    // Same control the timeline uses, so the two bars are identical and this
+    // one can actually be dragged.
+    bar_.Create(view_, 1, inst, true);
+    return true;
+}
+
+void LogView::UpdateBar()
+{
+    if (!view_ || !bar_.hwnd()) return;
+
+    RECT rc;
+    ::GetClientRect(view_, &rc);
+    const int trackH = std::max(0, (int)(rc.bottom - rc.top));
+
+    // Hide it unless there is genuinely something to scroll.
+    const int visible = std::max(1, VisibleLines());
+    const bool want = (int)shown_.size() > visible;
+    if (::IsWindowVisible(bar_.hwnd()) != (want ? TRUE : FALSE))
+        ::ShowWindow(bar_.hwnd(), want ? SW_SHOWNOACTIVATE : SW_HIDE);
+    if (!want) return;
+
+    ::MoveWindow(bar_.hwnd(), (int)rc.right - kScrollBarW, 0, kScrollBarW, trackH, TRUE);
+    bar_.SetRange(0, (int)shown_.size(), visible);
+    bar_.SetValue(first_);
 }
 
 void LogView::SetFont(HFONT font)
@@ -149,6 +174,7 @@ void LogView::Rebuild()
 
     if (selTo_ > shown_.size())   selTo_   = shown_.size();
     if (selFrom_ > shown_.size()) selFrom_ = shown_.size();
+    UpdateBar();
     ::InvalidateRect(view_, nullptr, FALSE);
 }
 
@@ -157,6 +183,7 @@ void LogView::ScrollTo(int firstLine)
     const int maxFirst = std::max(0, (int)shown_.size() - VisibleLines());
     first_ = std::min(std::max(0, firstLine), maxFirst);
     stick_ = (first_ >= maxFirst);
+    UpdateBar();
     ::InvalidateRect(view_, nullptr, FALSE);
 }
 
@@ -169,6 +196,7 @@ void LogView::ScrollToBottom()
 {
     first_ = std::max(0, (int)shown_.size() - VisibleLines());
     stick_ = true;
+    UpdateBar();
     ::InvalidateRect(view_, nullptr, FALSE);
 }
 
@@ -272,27 +300,8 @@ void LogView::OnPaint()
     if (selBrush) ::DeleteObject(selBrush);
     if (old) ::SelectObject(dc, old);
 
-    // ---- scroll bar (drawn by hand; it is not a real control) --------------
-    const int maxFirst = std::max(0, (int)shown_.size() - VisibleLines());
-    if (maxFirst > kMinScrollRange)
-    {
-        RECT bar = { rc.right - kScrollBarW, 0, rc.right, rc.bottom };
-        HBRUSH tb = ::CreateSolidBrush(RGB(240, 240, 240));
-        ::FillRect(dc, &bar, tb);
-        ::DeleteObject(tb);
-
-        const int track = bar.bottom - bar.top;
-        int thumbH = track * std::max(1, VisibleLines()) / (int)shown_.size();
-        thumbH = std::min(track, std::max(24, thumbH));
-        const int thumbY = bar.top + (track - thumbH) * first_ / std::max(1, maxFirst);
-
-        RECT thumb = { bar.left + 2, thumbY, bar.right - 2, thumbY + thumbH };
-        HBRUSH hb = ::CreateSolidBrush(RGB(160, 160, 160));
-        ::FillRect(dc, &thumb, hb);
-        ::DeleteObject(hb);
-        ::FrameRect(dc, &bar, (HBRUSH)::GetStockObject(GRAY_BRUSH));
-    }
-
+    // The scroll bar is a child window (ScrollBarView), painted by itself -
+    // nothing to draw here.
     ::EndPaint(view_, &ps);
 }
 
@@ -384,6 +393,12 @@ LRESULT LogView::WndProc(UINT msg, WPARAM wp, LPARAM lp)
     case WM_SIZE:
         ComputeMetrics();
         Rebuild();
+        UpdateBar();
+        return 0;
+
+    case WM_VSCROLL:
+        // Dragging / paging the scroll bar: it reports an absolute position.
+        ScrollTo(HIWORD(wp));
         return 0;
 
     case WM_PAINT:

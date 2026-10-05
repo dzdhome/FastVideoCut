@@ -26,6 +26,7 @@
 #include "Project.h"
 #include "Ffmpeg.h"
 #include "Settings.h"
+#include "ScrollBarView.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -167,8 +168,13 @@ private:
 
     // -------- state -------------------------------------------------------
     HWND        hwnd_       = nullptr;
-    HWND        scroll_     = nullptr;      // 水平滚动条（时间轴）
-    HWND        vscroll_    = nullptr;      // 垂直滚动条（视频行）
+    ScrollBarView hBar_;        // 水平滚动条（时间轴，自绘）
+    ScrollBarView vBar_;        // 垂直滚动条（视频行，自绘）
+    // Range/page cached by UpdateScrollBar/UpdateVScrollBar. WM_HSCROLL and
+    // WM_VSCROLL used to read these back with GetScrollInfo, which no longer
+    // applies now that the bars are our own window class.
+    int           hMin_ = 0, hMax_ = 0, hPage_ = 1;
+    int           vMin_ = 0, vMax_ = 0, vPage_ = 1;
     Project*    project_    = nullptr;
     Ffmpeg*     ffmpeg_     = nullptr;
     AppSettings* settings_  = nullptr;

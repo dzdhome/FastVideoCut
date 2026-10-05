@@ -199,11 +199,13 @@ bool TimelineView::Create(HWND parent, int id, HINSTANCE hInst)
                               0, 0, 10, 10, parent, (HMENU)(INT_PTR)id, hInst, this);
     if (!hwnd_) return false;
 
-    scroll_ = ::CreateWindowExW(0, L"SCROLLBAR", L"", WS_CHILD | WS_VISIBLE | SBS_HORZ,
-                                0, 0, 10, kScrollH, hwnd_, (HMENU)1, hInst, nullptr);
+    // Both bars are self-painted now (same look as the log view). See
+    // ScrollBarView.h - it reports WM_HSCROLL / WM_VSCROLL with an emulated
+    // SB_* code, so the handlers below are unchanged apart from where they get
+    // their range/page numbers from.
+    hBar_.Create(hwnd_, 1, hInst, false);
     // 视频行很多时（10 个以上）下面的行点不到，用垂直滚动条 + 滚轮上下翻
-    vscroll_ = ::CreateWindowExW(0, L"SCROLLBAR", L"", WS_CHILD | SBS_VERT,
-                                 0, 0, kVScrollW, 10, hwnd_, (HMENU)2, hInst, nullptr);
+    vBar_.Create(hwnd_, 2, hInst, true);
     StartMouseTracking();
     ::DragAcceptFiles(hwnd_, TRUE);
 
@@ -384,8 +386,8 @@ void TimelineView::LayoutChildren()
     ::GetClientRect(hwnd_, &rc);
     clientW_ = rc.right;
     clientH_ = rc.bottom;
-    if (scroll_)
-        ::MoveWindow(scroll_, 0, rc.bottom - kScrollH, rc.right, kScrollH, TRUE);
+    if (hBar_.hwnd())
+        ::MoveWindow(hBar_.hwnd(), 0, rc.bottom - kScrollH, rc.right, kScrollH, TRUE);
 
     int maxOff = MaxRowOffset();
     if (rowOffset_ > maxOff) rowOffset_ = maxOff;
@@ -395,7 +397,7 @@ void TimelineView::LayoutChildren()
 
 void TimelineView::UpdateScrollBar()
 {
-    if (!scroll_ || !project_) return;
+    if (!hBar_.hwnd() || !project_) return;
     double maxDur = project_->MaxDuration();
     if (maxDur <= 0.0) maxDur = 1.0;
 
@@ -404,17 +406,14 @@ void TimelineView::UpdateScrollBar()
     double visSec = (double)(rc.right - kLeftPanelW) / pxPerSec_;
     if (visSec < 0.001) visSec = 0.001;
 
-    SCROLLINFO si;
-    ::ZeroMemory(&si, sizeof(si));
-    si.cbSize = sizeof(si);
-    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
-    si.nMin = 0;
-    si.nMax = (int)(maxDur * 100.0);
-    if (si.nMax < 100) si.nMax = 100;
-    si.nPage = (UINT)(visSec * 100.0);
-    if (si.nPage < 10) si.nPage = 10;
-    si.nPos = (int)(viewStart_ * 100.0);
-    ::SetScrollInfo(scroll_, SB_CTL, &si, TRUE);
+    hMin_ = 0;
+    hMax_ = (int)(maxDur * 100.0);
+    if (hMax_ < 100) hMax_ = 100;
+    hPage_ = (int)(visSec * 100.0);
+    if (hPage_ < 10) hPage_ = 10;
+
+    hBar_.SetRange(hMin_, hMax_, hPage_);
+    hBar_.SetValue((int)(viewStart_ * 100.0));
 }
 
 // ---------------------------------------------------------------------------
@@ -480,31 +479,27 @@ void TimelineView::EnsureRowVisible(int index)
 
 void TimelineView::UpdateVScrollBar()
 {
-    if (!vscroll_ || !hwnd_) return;
+    if (!vBar_.hwnd() || !hwnd_) return;
     int maxOff = MaxRowOffset();
     int view = ViewportH();
     if (view <= 0) view = 1;
 
     // 只有真的放不下才显示，否则一直占着右边一条
     BOOL wantVisible = (maxOff > 0) ? TRUE : FALSE;
-    if (::IsWindowVisible(vscroll_) != wantVisible)
+    if (::IsWindowVisible(vBar_.hwnd()) != wantVisible)
     {
-        ::ShowWindow(vscroll_, wantVisible ? SW_SHOWNOACTIVATE : SW_HIDE);
+        ::ShowWindow(vBar_.hwnd(), wantVisible ? SW_SHOWNOACTIVATE : SW_HIDE);
         ::InvalidateRect(hwnd_, nullptr, FALSE);
     }
     if (!wantVisible) return;
 
-    ::MoveWindow(vscroll_, clientW_ - kVScrollW, kRulerH, kVScrollW, view, TRUE);
+    ::MoveWindow(vBar_.hwnd(), clientW_ - kVScrollW, kRulerH, kVScrollW, view, TRUE);
 
-    SCROLLINFO si;
-    ::ZeroMemory(&si, sizeof(si));
-    si.cbSize = sizeof(si);
-    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
-    si.nMin = 0;
-    si.nMax = maxOff;
-    si.nPage = view;
-    si.nPos = rowOffset_;
-    ::SetScrollInfo(vscroll_, SB_VERT, &si, TRUE);
+    vMin_  = 0;
+    vMax_  = maxOff;
+    vPage_ = view;
+    vBar_.SetRange(vMin_, vMax_, vPage_);
+    vBar_.SetValue(rowOffset_);
 }
 
 // ---------------------------------------------------------------------------
@@ -658,25 +653,20 @@ LRESULT TimelineView::WndProc(UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_HSCROLL:
     {
-        if (!scroll_) return 0;
-        SCROLLINFO si;
-        ::ZeroMemory(&si, sizeof(si));
-        si.cbSize = sizeof(si);
-        si.fMask = SIF_TRACKPOS | SIF_POS | SIF_PAGE | SIF_RANGE;
-        ::GetScrollInfo(scroll_, SB_CTL, &si);
-
-        int code = LOWORD(wp);
-        int pos = si.nPos;
-        if (code == SB_THUMBTRACK || code == SB_THUMBPOSITION) pos = si.nTrackPos;
-        else if (code == SB_LINELEFT)  pos -= 20;
+        // Range/page come from UpdateScrollBar's cached copy; the position
+        // rides along in HIWORD(wp) from ScrollBarView.
+        const int code = LOWORD(wp);
+        int pos = HIWORD(wp);
+        if (code != SB_THUMBTRACK && code != SB_THUMBPOSITION) pos = hBar_.Value();
+        if (code == SB_LINELEFT)  pos -= 20;
         else if (code == SB_LINERIGHT) pos += 20;
-        else if (code == SB_PAGELEFT)  pos -= (int)si.nPage;
-        else if (code == SB_PAGERIGHT) pos += (int)si.nPage;
-        else if (code == SB_LEFT)      pos = si.nMin;
-        else if (code == SB_RIGHT)     pos = si.nMax;
+        else if (code == SB_PAGELEFT)  pos -= hPage_;
+        else if (code == SB_PAGERIGHT) pos += hPage_;
+        else if (code == SB_LEFT)      pos = hMin_;
+        else if (code == SB_RIGHT)     pos = hMax_;
 
-        if (pos < si.nMin) pos = si.nMin;
-        if (pos > si.nMax - (int)si.nPage + 1) pos = si.nMax - (int)si.nPage + 1;
+        if (pos < hMin_) pos = hMin_;
+        if (pos > hMax_ - hPage_ + 1) pos = hMax_ - hPage_ + 1;
         if (pos < 0) pos = 0;
 
         viewStart_ = (double)pos / 100.0;
@@ -688,22 +678,15 @@ LRESULT TimelineView::WndProc(UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_VSCROLL:
     {
-        if (!vscroll_) return 0;
-        SCROLLINFO si;
-        ::ZeroMemory(&si, sizeof(si));
-        si.cbSize = sizeof(si);
-        si.fMask = SIF_TRACKPOS | SIF_POS | SIF_PAGE | SIF_RANGE;
-        ::GetScrollInfo(vscroll_, SB_VERT, &si);
-
-        int code = LOWORD(wp);
-        int pos = si.nPos;
-        if (code == SB_THUMBTRACK || code == SB_THUMBPOSITION) pos = si.nTrackPos;
-        else if (code == SB_LINEUP)    pos -= RowHeight();
+        const int code = LOWORD(wp);
+        int pos = HIWORD(wp);
+        if (code != SB_THUMBTRACK && code != SB_THUMBPOSITION) pos = vBar_.Value();
+        if (code == SB_LINEUP)     pos -= RowHeight();
         else if (code == SB_LINEDOWN)  pos += RowHeight();
-        else if (code == SB_PAGEUP)    pos -= (int)si.nPage;
-        else if (code == SB_PAGEDOWN)  pos += (int)si.nPage;
-        else if (code == SB_TOP)       pos = si.nMin;
-        else if (code == SB_BOTTOM)    pos = si.nMax;
+        else if (code == SB_PAGEUP)    pos -= vPage_;
+        else if (code == SB_PAGEDOWN)  pos += vPage_;
+        else if (code == SB_TOP)       pos = vMin_;
+        else if (code == SB_BOTTOM)    pos = vMax_;
 
         int maxOff = MaxRowOffset();
         if (pos < 0) pos = 0;
@@ -821,7 +804,7 @@ void TimelineView::OnPaint()
     paintRc.bottom -= kScrollH;
     if (paintRc.bottom < kRulerH + 8) paintRc.bottom = kRulerH + 8;
     // 垂直滚动条占掉右侧一条，帧流不要画到它下面
-    if (vscroll_ && ::IsWindowVisible(vscroll_))
+    if (vBar_.hwnd() && ::IsWindowVisible(vBar_.hwnd()))
     {
         paintRc.right -= kVScrollW;
         if (paintRc.right < kLeftPanelW + 20) paintRc.right = kLeftPanelW + 20;

@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include "ScrollBarView.h"
+
 class LogView
 {
 public:
@@ -32,6 +34,11 @@ public:
     // size. Does nothing when the usable width has not changed, because a
     // drag-resize fires WM_SIZE per pixel.
     void Rebuild();
+
+    // Keeps the scroll bar in step with shown_ / first_. Called after anything
+    // that changes either. The bar is a real ScrollBarView, shared with the
+    // timeline, so it can be dragged instead of only looking draggable.
+    void UpdateBar();
 
     static const wchar_t* ClassName() { return L"FastVideoCutLogView"; }
 
@@ -62,6 +69,7 @@ private:
 
     HWND                      view_    = nullptr;
     HFONT                     font_    = nullptr;
+    ScrollBarView             bar_;
 
     std::vector<std::wstring> raw_;      // lines as logged, still unwrapped
     std::vector<std::wstring> shown_;   // visual lines, already wrapped

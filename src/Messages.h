@@ -34,6 +34,9 @@
 #define WM_FVC_AUTOSTART (WM_APP + 104) // start the --auto-detect/--auto-export job after files are queued
 #define WM_FVC_PREVIEW (WM_APP + 105)   // wParam = item index, lParam = segment index (timeline click)
 #define WM_FVC_KEEPCHG (WM_APP + 106)   // wParam = item index (-1 = all items): keep selection changed
+#define WM_FVC_PVSPLIT (WM_APP + 107)   // preview pane: insert/remove a manual split at the paused position
+#define WM_FVC_SPLITDEL (WM_APP + 108)  // timeline: wParam = item index, lParam = index into VideoItem::manualSplits
+#define WM_FVC_FFMPEG_MISSING (WM_APP + 109) // ffmpeg missing at startup (prompt once, async)
 
 enum UiMessageKind
 {

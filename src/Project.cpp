@@ -28,6 +28,39 @@
 
 static const double kMinSegment = 0.02;     // 20 ms: ignore smaller slivers
 
+// 把手动插入的分割点切进分段表：只切非黑屏段，太靠近已有边界或视频两端的
+// 直接跳过（列表可能来自旧版本 / 手改，不能假设它一定干净）。
+static void ApplyManualSplits(VideoItem& item, double dur)
+{
+    if (item.manualSplits.empty() || item.segments.empty() || dur <= 0.0) return;
+
+    std::vector<double> pts = item.manualSplits;
+    std::sort(pts.begin(), pts.end());
+    pts.erase(std::unique(pts.begin(), pts.end()), pts.end());
+
+    for (size_t p = 0; p < pts.size(); ++p)
+    {
+        const double t = pts[p];
+        if (t <= kManualSplitMinGap || t >= dur - kManualSplitMinGap) continue;
+
+        for (size_t i = 0; i < item.segments.size(); ++i)
+        {
+            Segment& s = item.segments[i];
+            if (s.kind != SegKind::Media) continue;
+            if (t <= s.t0 + kManualSplitMinGap || t >= s.t1 - kManualSplitMinGap) continue;
+
+            Segment tail;
+            tail.t0      = t;
+            tail.t1      = s.t1;
+            tail.kind    = SegKind::Media;
+            tail.selected = s.selected;
+            s.t1 = t;
+            item.segments.insert(item.segments.begin() + (std::ptrdiff_t)i + 1, tail);
+            break;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // VideoItem
 // ---------------------------------------------------------------------------
@@ -348,6 +381,9 @@ void Project::RebuildSegments(VideoItem& item, bool keepSelection)
         item.segments.push_back(s);
     }
 
+    // 手动插入的分割点重新套用一遍：重新检测黑屏不会把它们弄丢
+    ApplyManualSplits(item, dur);
+
     // 默认整段保留：黑屏只是"片头/片尾分界线"的提示，不会被自动删掉
     item.keepStart = 0;
     item.keepEnd   = (int)item.segments.size() - 1;
@@ -399,7 +435,159 @@ void Project::RebuildSegments(VideoItem& item, bool keepSelection)
     }
 }
 
-// 检测黑屏很贵（16 分钟 1080p 素材约 6 秒），所以默认只处理还没分析过的视频，
+// ---------------------------------------------------------------------------
+// 手动插入的分割点
+//
+// 分段表必须始终把文件铺满（中间不能有缝），所以"插入分割"不是往列表里加一
+// 条记录就完事，而是把所在的段从中间切开；删除时再把两段拼回去。选区是靠
+// keepStart / keepEnd / keepOverride 三个下标描述的，切/拼都会让下标移动，
+// 这里逐个跟着改，用户的保留选择才不会在切一刀之后跑偏。
+// ---------------------------------------------------------------------------
+int Project::ManualSplitNear(const VideoItem& item, double t, double tol)
+{
+    int   best = -1;
+    double bestD = tol + 1.0;
+    for (size_t i = 0; i < item.manualSplits.size(); ++i)
+    {
+        const double d = std::fabs(item.manualSplits[i] - t);
+        if (d <= tol && d < bestD) { bestD = d; best = (int)i; }
+    }
+    return best;
+}
+
+bool Project::HasManualSplitNear(const VideoItem& item, double t, double tol)
+{
+    return ManualSplitNear(item, t, tol) >= 0;
+}
+
+bool Project::InsertManualSplit(VideoItem& item, double t, std::wstring* why, int* segIndex)
+{
+    if (segIndex) *segIndex = -1;
+
+    // TR() 在这里只能调用在运行期（Loc::Apply 之后），所以用 lambda 现取现存
+    const auto fail = [why](const wchar_t* zh, const wchar_t* en) -> bool
+    {
+        if (why) *why = TR(zh, en);
+        return false;
+    };
+
+    const double dur = item.info.duration;
+    if (item.segments.empty() || dur <= 0.0)
+        return fail(L"这个视频还没有分段（先做黑屏检测）",
+                    L"this video has no segments yet (run detection first)");
+    if (t <= kManualSplitMinGap || t >= dur - kManualSplitMinGap)
+        return fail(L"位置太靠近视频开头或结尾", L"too close to the start or the end of the video");
+
+    // 已经有分界（黑屏边界 / 之前的手动分割）就不用再切一刀
+    for (size_t i = 0; i < item.segments.size(); ++i)
+    {
+        if (std::fabs(item.segments[i].t0 - t) < kManualSplitMinGap ||
+            std::fabs(item.segments[i].t1 - t) < kManualSplitMinGap)
+            return fail(L"位置太靠近已有的分段边界", L"too close to an existing segment boundary");
+    }
+
+    int idx = -1;
+    for (size_t i = 0; i < item.segments.size(); ++i)
+    {
+        if (t > item.segments[i].t0 && t < item.segments[i].t1) { idx = (int)i; break; }
+    }
+    if (idx < 0)
+        return fail(L"找不到该位置所在的分段", L"no segment contains that position");
+    if (item.segments[(size_t)idx].kind != SegKind::Media)
+        return fail(L"该位置在黑屏段内，不需要再分割", L"the position is inside a black segment");
+
+    Segment& seg = item.segments[(size_t)idx];
+    const bool hadOverride = item.keepOverride.find(idx) != item.keepOverride.end();
+    const bool sel = seg.selected;
+
+    Segment tail;
+    tail.t0       = t;
+    tail.t1       = seg.t1;
+    tail.kind     = SegKind::Media;
+    tail.selected = sel;
+    seg.t1 = t;
+    item.segments.insert(item.segments.begin() + (std::ptrdiff_t)idx + 1, tail);
+
+    // ---- 选区跟着下标走 ---------------------------------------------------
+    if (item.keepStart > idx) ++item.keepStart;
+    if (item.keepEnd >= idx)  ++item.keepEnd;      // 范围末段被切成两半 -> 两半都留在范围内
+
+    std::map<int, bool> shifted;
+    for (std::map<int, bool>::const_iterator it = item.keepOverride.begin();
+         it != item.keepOverride.end(); ++it)
+        shifted[it->first > idx ? it->first + 1 : it->first] = it->second;
+
+    // 新的一半只有在"落在选区外"或"前一半被单独覆盖"时才需要显式覆盖，
+    // 否则 RecomputeSelection 按区间默认值算，切一刀就把选择改了。
+    const bool newInRange = (idx + 1 >= item.keepStart && idx + 1 <= item.keepEnd);
+    if (hadOverride || !newInRange) shifted[idx + 1] = sel;
+    item.keepOverride.swap(shifted);
+
+    RecomputeSelection(item);
+
+    // ---- 记进手动分割表（升序去重） ---------------------------------------
+    item.manualSplits.push_back(t);
+    std::sort(item.manualSplits.begin(), item.manualSplits.end());
+    item.manualSplits.erase(std::unique(item.manualSplits.begin(), item.manualSplits.end()),
+                            item.manualSplits.end());
+
+    if (segIndex) *segIndex = idx;
+    return true;
+}
+
+bool Project::RemoveManualSplitNear(VideoItem& item, double t, double tol)
+{
+    const int at = ManualSplitNear(item, t, tol);
+    if (at < 0) return false;
+    const double s = item.manualSplits[(size_t)at];
+    item.manualSplits.erase(item.manualSplits.begin() + (std::ptrdiff_t)at);
+
+    // 找到 s 这条边界两侧的段，把它们拼回去
+    int idx = -1;
+    for (size_t i = 0; i + 1 < item.segments.size(); ++i)
+    {
+        if (std::fabs(item.segments[i].t1 - s) < 1e-6 &&
+            std::fabs(item.segments[i + 1].t0 - s) < 1e-6)
+        {
+            idx = (int)i;
+            break;
+        }
+    }
+    if (idx >= 0 && item.segments[(size_t)idx].kind == item.segments[(size_t)idx + 1].kind)
+    {
+        const bool selA = item.segments[(size_t)idx].selected;
+
+        item.segments[(size_t)idx].t1 = item.segments[(size_t)idx + 1].t1;
+        item.segments.erase(item.segments.begin() + (std::ptrdiff_t)idx + 1);
+
+        if (item.keepStart > idx + 1)       --item.keepStart;
+        else if (item.keepStart == idx + 1)  item.keepStart = idx;
+        if (item.keepEnd >= idx + 1)        --item.keepEnd;
+
+        std::map<int, bool> shifted;
+        for (std::map<int, bool>::const_iterator it = item.keepOverride.begin();
+             it != item.keepOverride.end(); ++it)
+        {
+            int k = it->first;
+            if (k == idx + 1) continue;               // 后一半没了
+            if (k > idx + 1) --k;
+            shifted[k] = it->second;
+        }
+        item.keepOverride.swap(shifted);
+
+        RecomputeSelection(item);
+
+        // 合并后的这一段沿用前一半的选中状态（区间被改过时用覆盖项钉住）
+        const bool inRange = (idx >= item.keepStart && idx <= item.keepEnd &&
+                              item.keepStart >= 0 && item.keepEnd >= 0);
+        if (inRange == selA) item.keepOverride.erase(idx);
+        else                 item.keepOverride[idx] = selA;
+        RecomputeSelection(item);
+    }
+    return true;
+}
+
+
 // 新增/移除文件后再点“检测黑屏”不会把已有结果全部重算。
 std::vector<int> Project::PendingDetect(const Project& project, bool forceAll)
 {

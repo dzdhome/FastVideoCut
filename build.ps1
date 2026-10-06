@@ -30,7 +30,7 @@ New-Item -ItemType Directory -Force $outDir | Out-Null
 # always built -O2 so it still produces readable assertion output.
 $cxxflags = @('-std=c++17', '-Wall', '-Wextra', '-DUNICODE', '-D_UNICODE')
 if ($Release) {
-    $cxxflags += @('-O3', '-flto', '-fno-exceptions', '-DNDEBUG', '-DVERSION="1.4.0"')
+    $cxxflags += @('-O3', '-flto', '-fno-exceptions', '-DNDEBUG', '-DVERSION="1.4.8"')
     # GCC's LTO pass reports -Wstringop-overread on std::wstring(L"") passed to
     # PostUiMessage (reading the NUL of an empty literal). Harmless, only noise.
     $cxxflags += '-Wno-stringop-overread'
@@ -93,7 +93,7 @@ Invoke-Tool $gxx ($cxxflags + $static + $ldflags + @('-municode', '-o', $gui) + 
 $st = Join-Path $outDir 'SelfTest.exe'
 Write-Host ("  build    {0}" -f $st)
 $stSrc = @((Join-Path $root 'tests\SelfTest.cpp'))
-foreach ($n in 'Utf', 'Process', 'Ffmpeg', 'Project', 'Loc') {
+foreach ($n in 'Utf', 'Process', 'Ffmpeg', 'Project', 'Loc', 'ScrollBarView') {
     $stSrc += (Join-Path $root ("src\$n.cpp"))
 }
 # SelfTest stays at -O2 with exceptions: no GUI, so strip/LTO buys nothing

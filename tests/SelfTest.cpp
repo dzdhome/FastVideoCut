@@ -29,6 +29,7 @@
 #include "../src/Ffmpeg.h"
 #include "../src/Project.h"
 #include "../src/Loc.h"
+#include "../src/ScrollBarView.h"
 
 #include <cstdio>
 #include <cmath>
@@ -615,6 +616,91 @@ int wmain(int argc, wchar_t** argv)
     Project::ClearSelection(proj.items[0]);
     Check(proj.items[0].keepStartTime() < 0.0 && proj.items[0].keepEndTime() < 0.0,
           "cleared selection reports no start/end time");
+
+    // -----------------------------------------------------------------------
+    // 6c. 手动插入的分割点（转场没有黑屏帧时人工切一刀）
+    // -----------------------------------------------------------------------
+    ::wprintf(L"\n[6c] manual split markers\n");
+    VideoItem& mi = proj.items[0];
+    Project::SelectAll(mi);
+    const int segBefore = (int)mi.segments.size();
+    std::wstring why;
+
+    Check(Project::InsertManualSplit(mi, 11.0, &why), "insert a manual split at 11 s", why);
+    Check((int)mi.segments.size() == segBefore + 1, "the split adds exactly one segment");
+    Check(mi.manualSplits.size() == 1, "the split point is remembered");
+    {
+        bool boundary = false;
+        for (size_t i = 0; i + 1 < mi.segments.size(); ++i)
+            if (Nearly(mi.segments[i].t1, 11.0, 1e-9) && Nearly(mi.segments[i + 1].t0, 11.0, 1e-9))
+                boundary = true;
+        Check(boundary, "the segment really is cut at 11 s");
+    }
+    Check(Nearly(mi.selectedDuration(), info.duration, 0.05),
+          "inserting a split does not change what is kept");
+    Check(Project::HasManualSplitNear(mi, 11.1, kManualSplitTol), "split found within the tolerance");
+    Check(!Project::HasManualSplitNear(mi, 11.5, kManualSplitTol), "split not found outside the tolerance");
+
+    // 位置不合适时要拒绝，并给出原因
+    Check(!Project::InsertManualSplit(mi, 8.01, &why), "too close to an existing boundary is refused");
+    Check(!why.empty(), "the refusal comes with a reason");
+    Check(!Project::InsertManualSplit(mi, 7.0, &why), "inside a black segment is refused");
+    Check(!Project::InsertManualSplit(mi, 0.01, &why), "at the very start of the video is refused");
+
+    // 区间选择在切一刀之后不能跑偏
+    Project::ClearSelection(mi);
+    Project::ClickKeepStart(mi, 2);
+    Project::ClickKeepEnd(mi, 3);           // 切出来的两半 [8..11] + [11..14]
+    Check(mi.selectedSegmentCount() == 2, "both halves of the split are inside the range");
+    const double leftT0  = mi.segments[2].t0;
+    const double rightT1 = mi.segments[3].t1;
+
+    // 删掉这刀 -> 合并回一段，选区跟着收回去
+    Check(Project::RemoveManualSplitNear(mi, 11.0, kManualSplitTol), "remove the manual split");
+    Check((int)mi.segments.size() == segBefore, "the two halves are merged back");
+    Check(mi.manualSplits.empty(), "the marker list is empty again");
+    Check(mi.selectedSegmentCount() == 1, "the merged segment keeps the selection");
+    Check(Nearly(mi.keepStartTime(), leftT0, 1e-6) && Nearly(mi.keepEndTime(), rightT1, 1e-6),
+          "the keep range spans the merged segment",
+          FormatString(L"%s .. %s", FormatTimecode(mi.keepStartTime()).c_str(),
+                       FormatTimecode(mi.keepEndTime()).c_str()));
+    Check(!Project::RemoveManualSplitNear(mi, 11.0, kManualSplitTol),
+          "removing a split that is not there fails");
+
+    // 重新检测黑屏之后手动分割仍然有效（RebuildSegments 会重新套用）
+    Project::SelectAll(mi);
+    Check(Project::InsertManualSplit(mi, 11.0, &why), "re-insert before re-detecting", why);
+    const int selBefore = mi.selectedSegmentCount();
+    Project::RebuildSegments(mi, true);
+    Check(mi.manualSplits.size() == 1, "re-detect keeps the manual split list");
+    Check((int)mi.segments.size() == segBefore + 1, "re-detect rebuilds the split segment");
+    Check(mi.selectedSegmentCount() == selBefore, "re-detect keeps the selection across the split");
+    Project::RemoveManualSplitNear(mi, 11.0, kManualSplitTol);   // 收拾干净
+
+    // -----------------------------------------------------------------------
+    // 6d. 滚动条的范围约定
+    //
+    // ScrollBarView 的 min/max 描述的是"整块内容"，page 才是视口。帧流的竖向
+    // 滚动条以前把"最大滚动偏移"当成了 max，滑块尺寸/显隐全算错 —— 这里把这个
+    // 约定钉死，谁再传错就会红。
+    // -----------------------------------------------------------------------
+    ::wprintf(L"\n[6d] scroll bar range convention\n");
+    {
+        ScrollBarView bar;          // SetRange/HasRange 只碰数值，不需要真的建窗口
+        bar.SetRange(0, 600, 400);  // 内容 600、视口 400 -> 能滚 200
+        Check(bar.HasRange(), "content larger than the viewport needs a thumb");
+        bar.SetValue(150);
+        Check(bar.Value() == 150, "the value round-trips");
+        bar.SetValue(9999);
+        Check(bar.Value() <= 600 - 400 + 1, "an out of range value is clamped");
+        bar.SetRange(0, 300, 400);  // 内容放得下 -> 没有范围
+        Check(!bar.HasRange(), "content that fits shows no range");
+
+        // 老 bug 的形状：600/400 的内容，错传成"最大偏移 200"之后
+        // HasRange() 会变成 false，于是滑块根本显示不出来。
+        bar.SetRange(0, 600 - 400, 400);
+        Check(!bar.HasRange(), "passing a max scroll offset instead of the content size is wrong");
+    }
 
     // 检测黑屏：默认只处理还没分析过的视频（新增/移除文件后不用全部重算）
     Project proj2;

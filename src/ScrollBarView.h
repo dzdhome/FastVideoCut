@@ -5,6 +5,16 @@
 // slim bar the log view draws: flat light track, plain grey thumb, thin frame.
 // Shared by the timeline (both axes) and the log view so they look identical.
 //
+// Range convention (this is what SetRange takes):
+//   min_  - always 0 for every user of this control
+//   max_  - the *whole content*: number of lines (log), duration in centiseconds
+//           (timeline), content height in pixels (timeline vertical)
+//   page_ - the viewport: how much of that content fits on screen
+// so the scrollable extent is max_ - page_ + 1 and `value` is the first visible
+// unit (first line / leftmost time / topmost pixel). Passing a maximum scroll
+// offset here instead makes the thumb size and HasRange() compute garbage - the
+// vertical timeline bar shipped with that exact bug for a while.
+//
 // Deliberately just a track and a thumb - no arrow buttons. The panes that use
 // it are only a few hundred pixels across, and the arrows ate width the
 // content could have used. The thumb darkens under the mouse and darker again

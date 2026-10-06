@@ -132,6 +132,12 @@ private:
     void OnAddFiles(std::vector<std::wstring>* files);
     void OnDropAdd(HDROP drop);
     void StartSegmentPreview(int itemIndex, int segIndex);
+    // 预览窗"插入分割"按钮：在暂停位置插入（或删除）一个手动分界
+    void OnPreviewSplit();
+    // 从分段表里删掉第 splitIndex 个手动分割点（预览窗按钮 / 帧流右键共用）
+    void DeleteManualSplit(int itemIndex, int splitIndex);
+    // 分段表变了（插入/删除手动分割）之后刷新帧流、列表行和预览窗按钮
+    void OnSegmentsChanged(int itemIndex);
     void LogKeepChange(int itemIndex);
     // 工具栏“列表/视频”按钮：左侧在文件列表与视频列表（帧流）之间切换
     void ToggleFileList();
@@ -149,6 +155,10 @@ private:
     // 重新分析单个视频（不影响其它已分析好的结果）
     void StartDetectOne(int index);
     void StartExport(int job);
+    // ffmpeg / ffprobe 缺失时的统一引导：日志 + 状态栏 + 弹窗。返回 false 表示
+    // 调用方应直接放弃这次操作；--nogui 下只写日志、不弹窗。
+    bool RequireFfmpeg(const wchar_t* what);
+    void WarnFfmpegMissingOnStartup();
     // 无损合并前逐项比对列表里所有参与合并的视频格式；不一致时问用户
     // “强行合并 / 取消 / 先转封装”。--nogui 下不能弹框，只写日志并放行。
     MergePlan ConfirmMergeFormats();
@@ -201,6 +211,10 @@ private:
     PreviewPane  preview_;
     LogView      logView_;        // 自绘日志面板（曾经是 EDIT 控件，见 LogView.h）
     AppArgs      args_;
+    // 正在预览哪个视频：预览窗的"插入分割"按钮要知道往哪张表里写。
+    // 存路径而不存指针，列表变动（移除/重排）之后靠它确认下标还没串。
+    int          previewItem_ = -1;
+    std::wstring previewPath_;
 
     std::thread          worker_;
     std::atomic<bool>    jobRunning_;

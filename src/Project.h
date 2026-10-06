@@ -29,6 +29,18 @@
 #include <vector>
 #include <map>
 
+// ---------------------------------------------------------------------------
+// 手动插入的分割点
+//
+// 正常的分段边界来自黑屏检测，但转场紧凑的片子根本没有黑屏帧，这时用户在
+// 预览窗暂停后手工切一刀。分割点本身是一个时间（秒），落在哪个非黑屏段里就
+// 把那个段一分为二 —— 分出来的两半仍是普通媒体段，只是多了一个可以点选的边。
+// ---------------------------------------------------------------------------
+// 暂停位置离已有分割点这么近时视为"同一个"（按钮文字在插入/删除之间切换）
+constexpr double kManualSplitTol = 0.25;
+// 距离已有分段边界小于这个值就不值得再切一刀（也用来拒绝贴边的插入）
+constexpr double kManualSplitMinGap = 0.05;
+
 enum class SegKind
 {
     Media,
@@ -73,6 +85,9 @@ struct VideoItem
     VideoInfo                info;
     std::vector<BlackRange>  blacks;
     std::vector<Segment>     segments;
+    // 手动插入的分割点（秒，升序去重）。转场没有黑屏帧时由用户在预览窗里手工
+    // 插入，重新检测黑屏后依然生效（Project::RebuildSegments 会重新套用）。
+    std::vector<double>      manualSplits;
     ItemStatus               status         = ItemStatus::Pending;
     std::wstring             message;
     double                   detectProgress = 0.0;
@@ -137,6 +152,18 @@ public:
     // Splits a freshly analysed item into media / black segments. Everything is
     // kept by default - black frames only mark the intro/outro boundaries.
     static void RebuildSegments(VideoItem& item, bool keepSelection = false);
+
+    // ---- 手动分割（黑屏检测找不到转场时人工插入） ------------------------
+    // 在 t 处把所在的非黑屏段一分为二。返回 false 时 *why 是给用户看的原因。
+    // segIndex 可选：返回被切开那一段的下标（新段 = segIndex + 1），
+    // 调用方据此修正自己缓存的段号。
+    static bool InsertManualSplit(VideoItem& item, double t, std::wstring* why = nullptr,
+                                  int* segIndex = nullptr);
+    // 删除离 t 最近（tol 以内）的手动分割点，并把两段合并回去。
+    static bool RemoveManualSplitNear(VideoItem& item, double t, double tol = kManualSplitTol);
+    // t 附近有没有手动分割点 / 它在 manualSplits 里的下标（没有则 -1）
+    static bool HasManualSplitNear(const VideoItem& item, double t, double tol = kManualSplitTol);
+    static int  ManualSplitNear(const VideoItem& item, double t, double tol = kManualSplitTol);
 
     // Indices that still need a blackdetect pass. Detection is expensive (a 16
     // minute 1080p clip takes ~6 s), so the default is to keep the result of the

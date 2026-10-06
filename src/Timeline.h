@@ -139,7 +139,10 @@ private:
     void EnsureRowVisible(int index);
     void StartMouseTracking();
     int  MaxRowOffset() const;
+    int  ContentHeight() const;      // 所有视频行 + 行间距的总高度（不含滚动条）
     int  ViewportH() const;
+    // 点 x 处（第 row 行）落在哪个手动分割标记上，没有则 -1。命中半径见 kSplitHitPx。
+    int  ManualSplitAt(int row, int x) const;
 
     void DrawEmptyState(HDC dc, const RECT& rc);
     void DrawRuler(HDC dc, const RECT& rc);
@@ -173,6 +176,9 @@ private:
     // Range/page cached by UpdateScrollBar/UpdateVScrollBar. WM_HSCROLL and
     // WM_VSCROLL used to read these back with GetScrollInfo, which no longer
     // applies now that the bars are our own window class.
+    // 约定和 ScrollBarView 一致：min/max 描述的是**整块内容**（max = 内容总量），
+    // page 才是视口大小，value 是当前偏移。水平方向早就这么传了，垂直方向以前
+    // 传的是"最大滚动偏移"，滑块比例全错（见 UpdateVScrollBar 的注释）。
     int           hMin_ = 0, hMax_ = 0, hPage_ = 1;
     int           vMin_ = 0, vMax_ = 0, vPage_ = 1;
     Project*    project_    = nullptr;
@@ -227,6 +233,8 @@ private:
     static const int kVScrollW   = 16;
     static const int kRowGap     = 8;
     static const int kMaxTiles   = 8;
+    // 手动分割标记的右键命中半径（像素）：只有点得足够准才当作"删除这个分割"
+    static const int kSplitHitPx = 6;
     // 左侧面板四行文字所需的高度：
     //   1. 视频名
     //   2. 分辨率 | 帧率格式 | 帧率

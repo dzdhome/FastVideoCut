@@ -189,6 +189,19 @@ bool PreviewPane::Create(HWND owner, int id, HINSTANCE inst)
                                  WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_PUSHBUTTON,
                                  0, 0, 10, 10, pane_, (HMENU)(INT_PTR)IDC_PV_STOP,
                                  inst_, nullptr);
+    btnBack_ = ::CreateWindowExW(0, L"BUTTON", TR(L"◀ 5s", L"◀ 5s"),
+                                 WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_PUSHBUTTON,
+                                 0, 0, 10, 10, pane_, (HMENU)(INT_PTR)IDC_PV_BACK,
+                                 inst_, nullptr);
+    btnFwd_ = ::CreateWindowExW(0, L"BUTTON", TR(L"5s ▶", L"5s ▶"),
+                                WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_PUSHBUTTON,
+                                0, 0, 10, 10, pane_, (HMENU)(INT_PTR)IDC_PV_FWD,
+                                inst_, nullptr);
+    // 只在暂停时露面：没有黑屏帧的转场就靠它人工切一刀（再点一次是删除）
+    btnSplit_ = ::CreateWindowExW(0, L"BUTTON", TR(L"插入分割", L"Split here"),
+                                  WS_CHILD | WS_DISABLED | BS_PUSHBUTTON,
+                                  0, 0, 10, 10, pane_, (HMENU)(INT_PTR)IDC_PV_SPLIT,
+                                  inst_, nullptr);
 
     errFile_ = PathCombine(GetLocalAppDataDir(), L"FastVideoCut\\preview_err.txt");
     EnsureDirectory(PathCombine(GetLocalAppDataDir(), L"FastVideoCut"));
@@ -203,6 +216,9 @@ void PreviewPane::SetFont(HFONT font)
     font_ = font;
     if (btnPause_) ::SendMessageW(btnPause_, WM_SETFONT, (WPARAM)font_, TRUE);
     if (btnStop_)  ::SendMessageW(btnStop_,  WM_SETFONT, (WPARAM)font_, TRUE);
+    if (btnBack_)  ::SendMessageW(btnBack_,  WM_SETFONT, (WPARAM)font_, TRUE);
+    if (btnFwd_)   ::SendMessageW(btnFwd_,   WM_SETFONT, (WPARAM)font_, TRUE);
+    if (btnSplit_) ::SendMessageW(btnSplit_, WM_SETFONT, (WPARAM)font_, TRUE);
     UpdateBarMetrics();
     if (pane_) ::InvalidateRect(pane_, nullptr, FALSE);
 }
@@ -214,10 +230,16 @@ void PreviewPane::UpdateBarMetrics()
     HGDIOBJ old = ::SelectObject(dc, font_);
     TEXTMETRICW tm;
     ::GetTextMetricsW(dc, &tm);
-    int h = tm.tmHeight + MulDiv(18, dpi_, 96);
     if (old) ::SelectObject(dc, old);
     ::ReleaseDC(pane_, dc);
-    barH_ = h;
+
+    // 底栏两行：上面一条进度条，下面文字 + 按钮
+    const int pad   = MulDiv(4, dpi_, 96);
+    const int seekH = MulDiv(10, dpi_, 96);
+    const int gap   = MulDiv(4, dpi_, 96);
+    const int rowH  = tm.tmHeight + MulDiv(10, dpi_, 96);
+    barH_ = pad + seekH + gap + rowH + pad;
+    if (barH_ < MulDiv(46, dpi_, 96)) barH_ = MulDiv(46, dpi_, 96);
     LayoutControls();
 }
 
@@ -236,19 +258,65 @@ void PreviewPane::LayoutControls()
     RECT rc;
     ::GetClientRect(pane_, &rc);
 
-    int gap = MulDiv(6, dpi_, 96);
-    int bw  = MulDiv(70, dpi_, 96);
-    int bh  = barH_ - 2 * gap;
-    if (bh < 18) bh = 18;
-    int y   = rc.bottom - barH_ + gap;
+    const int pad   = MulDiv(4, dpi_, 96);
+    const int gap   = MulDiv(5, dpi_, 96);
+    const int seekH = MulDiv(10, dpi_, 96);
 
-    ::MoveWindow(btnStop_,  rc.right - gap - bw, y, bw, bh, TRUE);
-    ::MoveWindow(btnPause_, rc.right - 2 * gap - 2 * bw, y, bw, bh, TRUE);
+    // ---- 进度条：整条底栏的宽度都归它 ------------------------------------
+    seekRc_.left   = pad;
+    seekRc_.right  = rc.right - pad;
+    seekRc_.top    = rc.bottom - barH_ + pad;
+    seekRc_.bottom = seekRc_.top + seekH;
+    if (seekRc_.right < seekRc_.left) seekRc_.right = seekRc_.left;
+
+    // ---- 第二行：左边状态文字，右边一排紧凑按钮 --------------------------
+    const int rowTop = seekRc_.bottom + MulDiv(4, dpi_, 96);
+    int bh = rc.bottom - pad - rowTop;
+    if (bh < MulDiv(18, dpi_, 96)) bh = MulDiv(18, dpi_, 96);
+
+    struct B { HWND h; int want; int w; };
+    B bs[5];
+    int n = 0;
+    if (btnSplit_ && ::IsWindowVisible(btnSplit_))
+        bs[n++] = { btnSplit_, MulDiv(62, dpi_, 96), 0 };
+    bs[n++] = { btnStop_,  MulDiv(46, dpi_, 96), 0 };
+    bs[n++] = { btnPause_, MulDiv(52, dpi_, 96), 0 };
+    bs[n++] = { btnFwd_,   MulDiv(42, dpi_, 96), 0 };
+    bs[n++] = { btnBack_,  MulDiv(42, dpi_, 96), 0 };
+
+    // 预览窗可以被压到 240px 宽：空间不够就把按钮等比压瘦，而不是互相盖住
+    const int avail  = rc.right - 2 * pad - gap * (n - 1);
+    const int minW   = MulDiv(30, dpi_, 96);
+    int wantTotal = 0;
+    for (int i = 0; i < n; ++i) { bs[i].w = bs[i].want; wantTotal += bs[i].want; }
+    if (wantTotal > avail && wantTotal > 0)
+    {
+        int budget = avail;
+        if (budget < minW * n) budget = minW * n;
+        for (int i = 0; i < n; ++i)
+        {
+            bs[i].w = bs[i].want * budget / wantTotal;
+            if (bs[i].w < minW) bs[i].w = minW;
+        }
+    }
+
+    int x = rc.right - pad;
+    for (int i = 0; i < n; ++i)
+    {
+        x -= bs[i].w;
+        ::MoveWindow(bs[i].h, x, rowTop, bs[i].w, bh, TRUE);
+        x -= gap;
+    }
+    // 状态文字画在按钮左边，右边界就是最左边那个按钮的左沿
+    textRight_ = (x > pad) ? x : pad;
 }
 
 void PreviewPane::UpdateButtons()
 {
-    bool on = (state_ == 1 || state_ == 2);
+    const bool loaded = !file_.empty() && t1_ > t0_;
+    const bool on     = (state_ == 1 || state_ == 2);
+    const bool paused = (state_ == 2);
+
     if (btnPause_)
     {
         ::SetWindowTextW(btnPause_, paused_ ? TR(L"继续", L"Resume") : TR(L"暂停", L"Pause"));
@@ -259,6 +327,31 @@ void PreviewPane::UpdateButtons()
         // 停止按钮的文字同样要跟着界面语言走（SetLanguage 会走到这里）
         ::SetWindowTextW(btnStop_, TR(L"停止", L"Stop"));
         ::EnableWindow(btnStop_, on ? TRUE : FALSE);
+    }
+    // 快退/快进只要这个分段还挂着就能用（放完、停止之后也能往回跳）
+    if (btnBack_) ::EnableWindow(btnBack_, loaded ? TRUE : FALSE);
+    if (btnFwd_)  ::EnableWindow(btnFwd_,  loaded ? TRUE : FALSE);
+
+    // "插入分割"只在暂停时露面；当前位置已经有分割点时同一个按钮改成删除
+    if (btnSplit_)
+    {
+        const bool want = paused && loaded;
+        if (want != (::IsWindowVisible(btnSplit_) != FALSE))
+        {
+            ::ShowWindow(btnSplit_, want ? SW_SHOWNOACTIVATE : SW_HIDE);
+            LayoutControls();          // 按钮行重新排布，文字区跟着让位
+        }
+        if (want)
+        {
+            const bool have = (splitQuery_ && splitQuery_(ShownPos()));
+            ::SetWindowTextW(btnSplit_, have ? TR(L"删除分割", L"Delete split")
+                                             : TR(L"插入分割", L"Split here"));
+            ::EnableWindow(btnSplit_, TRUE);
+        }
+        else
+        {
+            ::EnableWindow(btnSplit_, FALSE);
+        }
     }
 }
 
@@ -298,10 +391,102 @@ LRESULT PreviewPane::WndProc(UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND:
     {
         int id = LOWORD(wp);
-        if (id == IDC_PV_PAUSE) { TogglePause(); return 0; }
-        if (id == IDC_PV_STOP)  { Stop();        return 0; }
+        if (id == IDC_PV_PAUSE) { TogglePause(); ::SetFocus(pane_); return 0; }
+        if (id == IDC_PV_STOP)  { Stop();        ::SetFocus(pane_); return 0; }
+        if (id == IDC_PV_BACK)  { SeekBy(-5.0);  ::SetFocus(pane_); return 0; }
+        if (id == IDC_PV_FWD)   { SeekBy(5.0);   ::SetFocus(pane_); return 0; }
+        if (id == IDC_PV_SPLIT)
+        {
+            // 插入还是删除由主窗口按当前位置判断（它知道分段表）
+            ::SetFocus(pane_);
+            if (owner_) ::PostMessageW(owner_, WM_FVC_PVSPLIT, 0, 0);
+            return 0;
+        }
         break;
     }
+
+    case WM_LBUTTONDOWN:
+    {
+        // 点一下画面/进度条就把键盘拿过来，方向键才归预览窗管
+        ::SetFocus(pane_);
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        if (!file_.empty() && ::PtInRect(&seekRc_, pt))
+        {
+            seekDrag_    = true;
+            seekDragPos_ = PosFromX(GET_X_LPARAM(lp));
+            ::SetCapture(pane_);
+            InvalidateSeek();
+        }
+        return 0;
+    }
+
+    case WM_MOUSEMOVE:
+        if (seekDrag_)
+        {
+            seekDragPos_ = PosFromX(GET_X_LPARAM(lp));
+            InvalidateSeek();
+            return 0;
+        }
+        // 指针停在预览窗上时焦点也跟过来（和视频列表一个套路），否则刚点开
+        // 一个分段就按方向键，动的却是时间线的横向滚动
+        if (!file_.empty() && ::GetFocus() != pane_) ::SetFocus(pane_);
+        return 0;
+
+    case WM_LBUTTONUP:
+        if (seekDrag_)
+        {
+            seekDrag_ = false;
+            if (::GetCapture() == pane_) ::ReleaseCapture();
+            SeekTo(seekDragPos_);           // 拖动过程中不重启 ffmpeg，松手才跳
+            InvalidateSeek();
+        }
+        return 0;
+
+    case WM_CAPTURECHANGED:
+        // 拖到一半被菜单/切窗打断：留在原地，不偷偷跳过去
+        seekDrag_ = false;
+        InvalidateSeek();
+        return 0;
+
+    case WM_MOUSEWHEEL:
+    {
+        // 滚轮默认只在指针确实压在预览窗上时才定位；否则放行给 DefWindowProc，
+        // 它会把消息转给主窗口，主窗口再按光标位置转给时间线（焦点在预览窗、
+        // 光标却在时间线上时，时间线的滚动不能被这里吞掉）。
+        POINT pt;
+        pt.x = GET_X_LPARAM(lp);
+        pt.y = GET_Y_LPARAM(lp);
+        ::ScreenToClient(pane_, &pt);
+        RECT crc;
+        ::GetClientRect(pane_, &crc);
+        if (!::PtInRect(&crc, pt)) break;
+
+        int notch = GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA;
+        if (notch == 0) notch = (GET_WHEEL_DELTA_WPARAM(wp) > 0) ? 1 : -1;
+        SeekBy(5.0 * notch);
+        return 0;
+    }
+
+    case WM_KEYDOWN:
+    {
+        const bool shift = (::GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        const double step = shift ? 1.0 : 5.0;
+        switch (wp)
+        {
+        case VK_LEFT:  SeekBy(-step); return 0;
+        case VK_RIGHT: SeekBy(step);  return 0;
+        case VK_HOME:  SeekTo(t0_);   return 0;
+        case VK_END:   SeekTo(t1_ - 0.05); return 0;
+        case VK_SPACE: TogglePause(); return 0;
+        case VK_PRIOR: SeekBy(-30.0); return 0;     // PageUp/PageDown = 半分钟
+        case VK_NEXT:  SeekBy(30.0);  return 0;
+        }
+        break;
+    }
+
+    case WM_GETDLGCODE:
+        // 方向键/空格归这里（默认会被当成对话框导航键吃掉）
+        return DLGC_WANTARROWS | DLGC_WANTCHARS;
 
     case WM_PV_REFRESH:
         // a worker finished / failed: update state on the UI thread
@@ -427,6 +612,17 @@ void PreviewPane::InvalidateVideo()
     ::InvalidateRect(pane_, &vid, FALSE);
 }
 
+// 底栏不再是静态的：进度条和时间码每帧都在变，所以每出一帧都要把它一起刷掉。
+// 区域只有几十像素高，比整窗 InvalidateRect 便宜得多。
+void PreviewPane::InvalidateBar()
+{
+    if (!pane_) return;
+    RECT rc;
+    ::GetClientRect(pane_, &rc);
+    RECT bar = { 0, rc.bottom - barH_, rc.right, rc.bottom };
+    ::InvalidateRect(pane_, &bar, FALSE);
+}
+
 void PreviewPane::OnPaint()
 {
     PAINTSTRUCT ps;
@@ -482,13 +678,41 @@ void PreviewPane::OnPaint()
     ::SelectObject(dc, oldPen);
     ::DeleteObject(sep);
 
-    double pos = 0.0;
-    int state = state_;
+    // ---- 进度条（上一行）：轨道 + 已播部分 + 滑块 ------------------------
+    if (seekRc_.right > seekRc_.left)
     {
-        std::lock_guard<std::mutex> lk(frameMx_);
-        pos = pos_;
+        const double span = t1_ - t0_;
+        double f = 0.0;
+        if (span > 0.0 && !file_.empty())
+            f = (ShownPos() - t0_) / span;
+        if (f < 0.0) f = 0.0;
+        if (f > 1.0) f = 1.0;
+
+        const int w = seekRc_.right - seekRc_.left;
+        HBRUSH track = ::CreateSolidBrush(RGB(58, 64, 76));
+        ::FillRect(dc, &seekRc_, track);
+        ::DeleteObject(track);
+
+        if (w > 0 && f > 0.0)
+        {
+            RECT filled = seekRc_;
+            filled.right = seekRc_.left + (int)((double)w * f + 0.5);
+            HBRUSH fill = ::CreateSolidBrush(RGB(86, 150, 235));
+            ::FillRect(dc, &filled, fill);
+            ::DeleteObject(fill);
+        }
+
+        // 滑块：一个窄竖条，拖动时跟着鼠标走
+        const int tw = MulDiv(5, dpi_, 96);
+        int tx = seekRc_.left + (int)((double)(w - tw) * f + 0.5);
+        RECT thumb = { tx, seekRc_.top - 1, tx + tw, seekRc_.bottom + 1 };
+        HBRUSH tb = ::CreateSolidBrush(seekDrag_ ? RGB(255, 255, 255) : RGB(222, 228, 238));
+        ::FillRect(dc, &thumb, tb);
+        ::DeleteObject(tb);
     }
 
+    double pos = ShownPos();
+    int state = state_;
     std::wstring text;
     if (state == 0 && label_.empty())
         text = TR(L"预览就绪", L"Preview ready");
@@ -501,15 +725,18 @@ void PreviewPane::OnPaint()
     HGDIOBJ oldFont = font_ ? ::SelectObject(dc, font_) : nullptr;
     RECT tr = bar;
     tr.left  += MulDiv(8, dpi_, 96);
-    tr.right -= MulDiv(170, dpi_, 96);
+    tr.right  = textRight_;
+    if (tr.right > bar.right - MulDiv(8, dpi_, 96))
+        tr.right = bar.right - MulDiv(8, dpi_, 96);
     tr.top   += MulDiv(2, dpi_, 96);
     tr.bottom-= MulDiv(2, dpi_, 96);
     ::DrawTextW(dc, text.c_str(), -1, &tr,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     if (oldFont) ::SelectObject(dc, oldFont);
 
-    // placeholder text when nothing has been decoded yet
-    if (!have)
+    // placeholder text when nothing has been decoded yet - only while idle,
+    // otherwise a seek (frame not arrived yet) would flash "click a segment"
+    if (!have && state == 0)
     {
         ::SetTextColor(dc, RGB(126, 134, 148));
         HGDIOBJ of = font_ ? ::SelectObject(dc, font_) : nullptr;
@@ -553,10 +780,13 @@ void PreviewPane::Play(const std::wstring& file, double t0, double t1,
         frameW_ = frameH_ = 0;
         hasFrame_ = false;
         pos_ = t0_;
+        paintedSeq_ = seq_;      // 帧缓冲已清空，别让下一次 paint 去"取新帧"
     }
+    playStart_  = t0_;
     compositeDirty_ = true;
     frames_ = 0;
     paused_ = false;
+    seekDrag_ = false;
 
     if (ffmpeg_.empty() || file_.empty() || !(t1_ > t0_))
     {
@@ -570,25 +800,15 @@ void PreviewPane::Play(const std::wstring& file, double t0, double t1,
     }
 
     // output size: fit into the video area, never upscale, keep the aspect ratio
-    RECT vr = VideoRect();
-    int availW = vr.right - vr.left - 8;
-    int availH = vr.bottom - vr.top - 8;
-    if (availW < 64) availW = 64;
-    if (availH < 64) availH = 64;
-
-    int ow = (srcW_ > 0) ? srcW_ : 640;
-    int oh = (srcH_ > 0) ? srcH_ : 360;
-    double aspect = (oh > 0) ? (double)ow / (double)oh : 16.0 / 9.0;
-    if (ow > availW) { ow = availW; oh = (int)(ow / aspect + 0.5); }
-    if (oh > availH) { oh = availH; ow = (int)(oh * aspect + 0.5); }
-    if (ow < 16) ow = 16;
-    if (oh < 16) oh = 16;
-    ow &= ~1;
-    oh &= ~1;
-
-    double outFps = srcFps_;
-    if (outFps < 8.0 || outFps > 60.0) outFps = 25.0;
-    if (outFps > 30.0) outFps = 30.0;   // keep the CPU load sane
+    int ow = 0, oh = 0;
+    double outFps = 0.0;
+    if (!ComputeOutput(ow, oh, outFps))
+    {
+        state_ = 4;
+        UpdateButtons();
+        ::InvalidateRect(pane_, nullptr, FALSE);
+        return;
+    }
 
     stop_ = false;
     state_ = 1;
@@ -601,6 +821,127 @@ void PreviewPane::Play(const std::wstring& file, double t0, double t1,
                          label_.c_str(), FormatTimecode(t0_).c_str(),
                          FormatTimecode(t1_).c_str(), ow, oh, outFps));
 
+    StartWorkers(ow, oh, outFps);
+}
+
+// 输出尺寸 / 帧率：塞进画面区，不放大，保持宽高比。Play 和 SeekTo 共用。
+bool PreviewPane::ComputeOutput(int& ow, int& oh, double& outFps)
+{
+    RECT rc;
+    ::GetClientRect(pane_, &rc);
+    if (rc.right - rc.left < 32 || rc.bottom - rc.top < 32) return false;   // 还没排版
+
+    RECT vr = VideoRect();
+    int availW = vr.right - vr.left - 8;
+    int availH = vr.bottom - vr.top - 8;
+    if (availW < 64) availW = 64;
+    if (availH < 64) availH = 64;
+
+    ow = (srcW_ > 0) ? srcW_ : 640;
+    oh = (srcH_ > 0) ? srcH_ : 360;
+    double aspect = (oh > 0) ? (double)ow / (double)oh : 16.0 / 9.0;
+    if (ow > availW) { ow = availW; oh = (int)(ow / aspect + 0.5); }
+    if (oh > availH) { oh = availH; ow = (int)(oh * aspect + 0.5); }
+    if (ow < 16) ow = 16;
+    if (oh < 16) oh = 16;
+    ow &= ~1;
+    oh &= ~1;
+
+    outFps = srcFps_;
+    if (outFps < 8.0 || outFps > 60.0) outFps = 25.0;
+    if (outFps > 30.0) outFps = 30.0;   // keep the CPU load sane
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// 定位（方向键 / 滚轮 / 进度条拖动）
+//
+// 管道跳不了：只能把两条 ffmpeg 停掉、从新位置重新起。暂停时定位还要多做
+// 一件事 —— 把新位置的第一帧画出来，否则屏幕上只剩上一段的黑画面（见
+// stepOnce_）。
+// ---------------------------------------------------------------------------
+double PreviewPane::Position()
+{
+    std::lock_guard<std::mutex> lk(frameMx_);
+    return pos_;
+}
+
+double PreviewPane::ShownPos()
+{
+    if (seekDrag_) return seekDragPos_;
+    std::lock_guard<std::mutex> lk(frameMx_);
+    return pos_;
+}
+
+double PreviewPane::PosFromX(int x) const
+{
+    const double span = t1_ - t0_;
+    if (span <= 0.0 || seekRc_.right <= seekRc_.left) return t0_;
+    double f = (double)(x - seekRc_.left) / (double)(seekRc_.right - seekRc_.left);
+    if (f < 0.0) f = 0.0;
+    if (f > 1.0) f = 1.0;
+    return t0_ + span * f;
+}
+
+void PreviewPane::InvalidateSeek()
+{
+    if (pane_) ::InvalidateRect(pane_, &seekRc_, FALSE);
+}
+
+void PreviewPane::RefreshButtons()
+{
+    UpdateButtons();
+    if (pane_) ::InvalidateRect(pane_, nullptr, FALSE);
+}
+
+void PreviewPane::SeekBy(double dt)
+{
+    SeekTo(ShownPos() + dt);
+}
+
+void PreviewPane::SeekTo(double t)
+{
+    // 没挂载分段（还没点开过 / ffmpeg 都没有）时无处可跳
+    if (!pane_ || ffmpeg_.empty() || file_.empty() || !(t1_ > t0_)) return;
+
+    const double end = (t1_ - 0.05 > t0_) ? t1_ - 0.05 : t0_;
+    t = ClampValue(t, t0_, end);
+
+    const bool stayPaused = paused_ || (state_ == 2);
+    StopWorkers(false);                 // 停管道、join 线程，和 Stop 一样的收尾
+
+    seekDrag_   = false;
+    playStart_  = t;
+    {
+        std::lock_guard<std::mutex> lk(frameMx_);
+        front_.clear();
+        paintBuf_.clear();
+        frameW_ = frameH_ = 0;
+        hasFrame_ = false;
+        pos_ = t;
+        paintedSeq_ = seq_;
+    }
+    compositeDirty_ = true;
+    frames_ = 0;
+
+    int ow = 0, oh = 0;
+    double outFps = 0.0;
+    if (!ComputeOutput(ow, oh, outFps))
+    {
+        state_ = 4;
+        playing_ = false;
+        UpdateButtons();
+        ::InvalidateRect(pane_, nullptr, FALSE);
+        return;
+    }
+
+    stop_ = false;
+    paused_ = stayPaused;
+    stepOnce_ = stayPaused ? 1 : 0;     // 暂停定位 -> 先亮一帧再停住
+    playing_ = true;
+    state_ = stayPaused ? 2 : 1;
+    UpdateButtons();
+    ::InvalidateRect(pane_, nullptr, FALSE);
     StartWorkers(ow, oh, outFps);
 }
 
@@ -660,10 +1001,10 @@ namespace
 
 void PreviewPane::VideoWorker(int outW, int outH, double outFps)
 {
-    const double dur = t1_ - t0_;
+    const double dur = t1_ - playStart_;
 
     std::wstring args = L"-hide_banner -nostdin -loglevel error -nostats";
-    args += L" -ss " + NumberText(t0_, 3);
+    args += L" -ss " + NumberText(playStart_, 3);
     args += L" -i "  + QuoteArg(file_);
     args += L" -t "  + NumberText(dur, 3);
     args += L" -an -sn -dn";
@@ -695,7 +1036,8 @@ void PreviewPane::VideoWorker(int outW, int outH, double outFps)
 
     while (!stop_)
     {
-        if (paused_)
+        // 暂停时不往下走 —— 除了"刚定位完要看的那一帧"（stepOnce_）
+        if (paused_ && stepOnce_.load() <= 0)
         {
             ::Sleep(20);
             pauseMs += 20;
@@ -715,7 +1057,7 @@ void PreviewPane::VideoWorker(int outW, int outH, double outFps)
         for (;;)
         {
             if (stop_) break;
-            if (paused_) { ::Sleep(20); pauseMs += 20; continue; }
+            if (paused_ && stepOnce_.load() <= 0) { ::Sleep(20); pauseMs += 20; continue; }
 
             ULONGLONG due = start + pauseMs +
                             (ULONGLONG)((double)idx * 1000.0 / outFps);
@@ -747,11 +1089,13 @@ void PreviewPane::VideoWorker(int outW, int outH, double outFps)
             frameW_ = outW;
             frameH_ = outH;
             hasFrame_ = true;
-            pos_ = t0_ + (double)idx / outFps;
+            pos_ = playStart_ + (double)idx / outFps;
             ++seq_;
         }
+        stepOnce_ = 0;                 // 暂停中定位的那一帧已经亮出来了
         frames_ = ++idx;
-        InvalidateVideo();            // only the picture area, the bar is static
+        InvalidateVideo();            // only the picture area...
+        InvalidateBar();              // ...plus the seek bar / time code
     }
 
     DWORD exitCode = 0;
@@ -789,10 +1133,10 @@ void PreviewPane::VideoWorker(int outW, int outH, double outFps)
 
 void PreviewPane::AudioWorker()
 {
-    const double dur = t1_ - t0_;
+    const double dur = t1_ - playStart_;
 
     std::wstring args = L"-hide_banner -nostdin -loglevel error -nostats";
-    args += L" -ss " + NumberText(t0_, 3);
+    args += L" -ss " + NumberText(playStart_, 3);
     args += L" -i "  + QuoteArg(file_);
     args += L" -t "  + NumberText(dur, 3);
     args += L" -vn -sn -dn -f s16le";
@@ -925,6 +1269,7 @@ void PreviewPane::StopWorkers(bool notify)
     bool wasPlaying = playing_.load();
     stop_   = true;
     paused_ = false;
+    stepOnce_ = 0;
 
     {
         std::lock_guard<std::mutex> lk(procMx_);

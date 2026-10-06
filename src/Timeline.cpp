@@ -57,6 +57,7 @@ static const COLORREF kClrDropBrd   = RGB(96, 100, 110);
 static const COLORREF kClrCurrent   = RGB(255, 200, 60);
 static const COLORREF kClrPlaceholder = RGB(44, 48, 56);
 static const COLORREF kClrHdr        = RGB(255, 168, 60);   // HDR 标识高亮色
+static const COLORREF kClrManual     = RGB(255, 140, 40);   // 手动插入的分割标记
 
 static void AlphaFillRect(HDC dc, const RECT& rc, COLORREF c, BYTE alpha)
 {
@@ -438,10 +439,15 @@ int TimelineView::ViewportH() const
 int TimelineView::MaxRowOffset() const
 {
     if (!project_ || project_->items.empty()) return 0;
-    int n = (int)project_->items.size();
-    int contentH = n * RowHeight() + (n - 1) * kRowGap;
-    int maxOff = contentH - ViewportH();
+    int maxOff = ContentHeight() - ViewportH();
     return (maxOff > 0) ? maxOff : 0;
+}
+
+int TimelineView::ContentHeight() const
+{
+    if (!project_ || project_->items.empty()) return 0;
+    int n = (int)project_->items.size();
+    return n * RowHeight() + (n - 1) * kRowGap;
 }
 
 void TimelineView::ScrollRows(int dy)
@@ -495,8 +501,14 @@ void TimelineView::UpdateVScrollBar()
 
     ::MoveWindow(vBar_.hwnd(), clientW_ - kVScrollW, kRulerH, kVScrollW, view, TRUE);
 
+    // ScrollBarView 的 min/max 描述的是**整块内容**（max = 内容总高），page 是
+    // 视口大小，value 才是滚动偏移 —— 日志面板和水平滚动条都是这么传的。
+    // 这里以前传的是 maxOff（最大滚动偏移），于是：
+    //   HasRange()   变成 "内容 > 2 倍视口" 才算有范围；
+    //   ThumbLength() 的比例尺少了一整段视口，滑块几乎恒为满高，
+    //                整条轨道被一个撑满的灰块盖住 —— 看起来就是"没有滑块"。
     vMin_  = 0;
-    vMax_  = maxOff;
+    vMax_  = ContentHeight();
     vPage_ = view;
     vBar_.SetRange(vMin_, vMax_, vPage_);
     vBar_.SetValue(rowOffset_);
@@ -545,6 +557,23 @@ int TimelineView::RowAt(int y, int* rowTop) const
     if (idx < 0 || idx >= (int)project_->items.size()) return -1;
     if (rowTop) *rowTop = kRulerH + idx * stride - rowOffset_;
     return idx;
+}
+
+int TimelineView::ManualSplitAt(int row, int x) const
+{
+    if (!project_ || row < 0 || row >= (int)project_->items.size()) return -1;
+    if (x < kLeftPanelW) return -1;
+
+    const VideoItem& it = project_->items[row];
+    int best = -1;
+    int bestD = kSplitHitPx + 1;
+    for (size_t i = 0; i < it.manualSplits.size(); ++i)
+    {
+        const int dx = TimeToX(it.manualSplits[i]) - x;
+        const int d  = (dx < 0) ? -dx : dx;
+        if (d <= kSplitHitPx && d < bestD) { bestD = d; best = (int)i; }
+    }
+    return best;
 }
 
 int TimelineView::SegmentAt(int index, int x) const
@@ -1248,6 +1277,31 @@ void TimelineView::DrawSegments(HDC dc, int index, const RECT& rc, int x0, int x
             FillSolid(dc, bl, RGB(210, 214, 222));
         }
     }
+
+    // 手动插入的分割点：橙色竖线 + 顶部三角。黑屏检测找不到的转场就是靠它标记
+    // 的，画得和普通分段边界不一样，才认得出哪些是人工加的、可以右键删掉。
+    for (size_t i = 0; i < it.manualSplits.size(); ++i)
+    {
+        const int sx = TimeToX(it.manualSplits[i]);
+        if (sx < x0 - 8 || sx > x1 + 8) continue;
+
+        RECT line = { sx - 1, top, sx + 1, bottom };
+        FillSolid(dc, line, kClrManual);
+
+        POINT tri[3];
+        tri[0].x = sx - 6; tri[0].y = top;
+        tri[1].x = sx + 6; tri[1].y = top;
+        tri[2].x = sx;     tri[2].y = top + 9;
+        HBRUSH br = ::CreateSolidBrush(kClrManual);
+        HPEN   pn = ::CreatePen(PS_SOLID, 1, kClrManual);
+        HGDIOBJ ob = ::SelectObject(dc, br);
+        HGDIOBJ op = ::SelectObject(dc, pn);
+        ::Polygon(dc, tri, 3);
+        ::SelectObject(dc, op);
+        ::SelectObject(dc, ob);
+        ::DeleteObject(pn);
+        ::DeleteObject(br);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1545,6 +1599,15 @@ void TimelineView::OnRButtonUp(int x, int y)
 
     int seg = SegmentAt(row, x);
     if (seg < 0) return;
+
+    // 右键点在手动分割标记上 = 删掉这个人工插入的分界（其余右键仍是"保留终点"）
+    const int ms = ManualSplitAt(row, x);
+    if (ms >= 0)
+    {
+        currentItem_ = row;
+        ::PostMessageW(::GetParent(hwnd_), WM_FVC_SPLITDEL, (WPARAM)row, (LPARAM)ms);
+        return;
+    }
 
     // 右键 = 保留终点
     Project::ClickKeepEnd(project_->items[row], seg);

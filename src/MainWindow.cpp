@@ -44,6 +44,10 @@
 
 #define FVC_CLASS_NAME  L"FastVideoCutMainWnd"
 
+// ffmpeg 缺失时引导用户去的官方下载页。RequireFfmpeg /
+// WarnFfmpegMissingOnStartup 的弹窗点“是”就用 ShellExecute 打开它。
+constexpr wchar_t kFfmpegDownloadUrl[] = L"https://www.gyan.dev/ffmpeg/builds/";
+
 namespace
 {
     // 顺序必须和 ToolBtn 枚举一致（LayoutChildren 里的 widths 数组也按它排）。
@@ -154,6 +158,62 @@ namespace
             out += FormatString(TR(L" …等共 %d 段", L" ... %d in total"), (int)ranges.size());
         return out;
     }
+
+    std::wstring FfmpegMissingText(const wchar_t* what)
+    {
+        if (Loc::IsEnglish())
+        {
+            std::wstring action = (what && *what) ? what : L"continue";
+            std::wstring s = L"ffmpeg.exe / ffprobe.exe not found, cannot ";
+            s += action;
+            s += L".\n\nPlease install ffmpeg first, then either:\n"
+                 L"- put its bin folder next to this exe; or\n"
+                 L"- set the ffmpeg folder in Settings; or\n"
+                 L"- add it to PATH and restart this program.\n\n"
+                 L"Official download: ";
+            s += kFfmpegDownloadUrl;
+            s += L"\n(Windows build, just unzip it)\n\n"
+                 L"Open the download page in your browser now?";
+            return s;
+        }
+        std::wstring action = (what && *what) ? what : L"继续";
+        std::wstring s = L"没有找到 ffmpeg.exe / ffprobe.exe，无法";
+        s += action;
+        s += L"。\n\n请先安装 ffmpeg，然后：\n"
+             L"· 把它的 bin 目录放到程序目录下；或\n"
+             L"· 在“设置”里指定 ffmpeg 目录；或\n"
+             L"· 把它加到系统 PATH 后重启本程序。\n\n"
+             L"官方下载：";
+        s += kFfmpegDownloadUrl;
+        s += L"\n(Windows build，下载后解压即可)\n\n"
+             L"现在就用浏览器打开下载页吗？";
+        return s;
+    }
+
+    // ffmpeg 缺失的统一弹窗：点“是”就用默认浏览器打开官方下载页。
+    // 返回 true 表示已经打开了下载页（调用方仅用于日志区分）。
+    bool AskOpenFfmpegDownloadPage(HWND owner, const std::wstring& msg)
+    {
+        const wchar_t* caption = TR(L"缺少 ffmpeg", L"ffmpeg missing");
+        const wchar_t* yesHint = Loc::IsEnglish()
+            ? L"\n\n(Yes = open the official download page in your browser)"
+            : L"\n\n(点“是”用浏览器打开官方下载页，点“否”关闭)";
+        int rc = ::MessageBoxW(owner, (msg + yesHint).c_str(), caption,
+                               MB_YESNO | MB_ICONWARNING);
+        if (rc != IDYES)
+            return false;
+        HINSTANCE opened = ::ShellExecuteW(owner, L"open", kFfmpegDownloadUrl,
+                                           nullptr, nullptr, SW_SHOWNORMAL);
+        if ((INT_PTR)opened <= 32)
+        {
+            ::MessageBoxW(owner,
+                          TR(L"打不开浏览器，请手动复制上面的官方下载地址到浏览器打开。",
+                             L"Cannot open the browser. Please copy the official download URL above into your browser."),
+                          caption, MB_OK | MB_ICONERROR);
+            return false;
+        }
+        return true;
+    }
 }   // namespace
 
 // ---------------------------------------------------------------------------
@@ -257,6 +317,11 @@ bool MainWindow::Create(HINSTANCE hInst, const AppArgs& args)
         // queued AFTER WM_FVC_ADD so the job starts with the files already loaded
         ::PostMessageW(hwnd_, WM_FVC_AUTOSTART, 0, 0);
     }
+    if (!ffmpeg_.available() && !args_.noGui)
+    {
+        // 启动时就缺 ffmpeg：窗口先出来，提示框排在后面，避免被主窗口盖住。
+        ::PostMessageW(hwnd_, WM_FVC_FFMPEG_MISSING, 0, 0);
+    }
     return true;
 }
 
@@ -357,6 +422,14 @@ void MainWindow::CreateChildren()
     {
         preview_.SetFont(fontUi_);
         preview_.SetFfmpeg(ffmpeg_.paths().ffmpeg);
+        // "插入分割 / 删除分割"按钮要按当前位置查分段表，查询实现放在主窗口
+        preview_.SetSplitQuery([this](double t)
+        {
+            if (previewItem_ < 0 || previewItem_ >= (int)project_.items.size()) return false;
+            const VideoItem& it = project_.items[previewItem_];
+            if (it.path != previewPath_) return false;
+            return Project::HasManualSplitNear(it, t);
+        });
     }
 
     // ---- log --------------------------------------------------------------
@@ -504,7 +577,7 @@ void MainWindow::LayoutChildren()
     int btnH    = MulDiv(30, s, 96);
     int listH   = MulDiv(150, s, 96);
     int statusH = MulDiv(24, s, 96);
-    int helpH   = MulDiv(38, s, 96);
+    int helpH   = MulDiv(54, s, 96);
     int logH    = MulDiv(120, s, 96);
     int progW   = MulDiv(190, s, 96);
 
@@ -626,6 +699,10 @@ LRESULT MainWindow::WndProc(UINT msg, WPARAM wp, LPARAM lp)
                 if (args_.quitOnEnd) ::PostMessageW(hwnd_, WM_CLOSE, 0, 0);
             }
         }
+        return 0;
+
+    case WM_FVC_FFMPEG_MISSING:
+        WarnFfmpegMissingOnStartup();
         return 0;
 
     case WM_SIZE:
@@ -799,6 +876,14 @@ LRESULT MainWindow::WndProc(UINT msg, WPARAM wp, LPARAM lp)
         StartSegmentPreview((int)wp, (int)lp);
         return 0;
 
+    case WM_FVC_PVSPLIT:
+        OnPreviewSplit();
+        return 0;
+
+    case WM_FVC_SPLITDEL:
+        DeleteManualSplit((int)wp, (int)lp);
+        return 0;
+
     case WM_DROPFILES:
         OnDropAdd((HDROP)wp);
         return 0;
@@ -847,12 +932,15 @@ void MainWindow::EnsureVisibleItem(int index)
     ::SendMessageW(list_, LVM_ENSUREVISIBLE, (WPARAM)index, FALSE);
 }
 
-// 重建整个列表。selectRow >= 0 时把该行设为选中（移动/排序后要保持选中项
-// 跟着视频走；传 -1 表示不主动选中，由调用方自己处理）。
-// 之前这里无条件选中第 0 行，导致上移/下移后高亮跑回顶部，看起来像“选中没跟着走”。
+// 重建整个列表后保持原来的选中行。selectRow >= 0 时显式选中该行；
+// selectRow < 0 时沿用调用前 ListView 里的选中行（之前无选中才不选）。
+// 注意：这里不再兜底选中第 0 行。调用前还没选中的首次刷新请显式传 0；
+// 否则默认行为是“保持”，不是“抢回第 0 行”—— 历史上兜底选第 0 行正是
+// “点移除删错视频”的祸根。
 void MainWindow::RebuildList(int selectRow)
 {
     if (!list_) return;
+    int keepSel = SelectedItem();   // LVM_DELETEALLITEMS 会丢选中，先记下来
     ::SendMessageW(list_, LVM_DELETEALLITEMS, 0, 0);
     for (size_t i = 0; i < project_.items.size(); ++i)
     {
@@ -867,7 +955,8 @@ void MainWindow::RebuildList(int selectRow)
     }
 
     int row = selectRow;
-    if (row < 0 && !project_.items.empty()) row = 0;   // 默认仍选中第一行
+    if (row < 0) row = keepSel;         // 没指定就沿用原来的选中行
+    if (row >= (int)project_.items.size()) row = (int)project_.items.size() - 1;
     if (row >= 0 && row < (int)project_.items.size())
     {
         // 先清空所有选中/焦点，再只选中目标行：多选或旧选中残留都会让高亮看起来错位
@@ -950,11 +1039,14 @@ void MainWindow::UpdateTitles()
         TR(L"左键分段 = 保留起点，右键分段 = 保留终点（两者之间全部保留）| Ctrl+左键 = 单段保留/取消 | "
            L"双击 = 只保留该段 | 列表双击/右键 = 重新分析这个视频 | 点击任一分段都会在右侧预览播放 | "
            L"滚轮 = 上下滚动视频 | Ctrl+滚轮 = 缩放，Shift+滚轮 = 横向平移，中键拖动 = 平移 | "
-           L"工具栏“列表” = 文件列表/视频列表切换",
+           L"工具栏“列表” = 文件列表/视频列表切换 | "
+           L"预览：←/→ 快退快进（Shift 精调 1 秒），空格暂停/继续 | 暂停时“插入分割”人工切分（橙色标记，右键可删除）",
            L"Left click = keep start, right click = keep end | Ctrl+click = toggle one segment | "
            L"double click = keep only that segment | double click / right click a row = re-analyse it | "
            L"clicking a segment previews it on the right | wheel = scroll videos | Ctrl+wheel = zoom | "
-           L"Shift+wheel or middle drag = pan | toolbar “List” = file list / video strip"));
+           L"Shift+wheel or middle drag = pan | toolbar “List” = file list / video strip | "
+           L"Preview: arrows seek (Shift = fine 1 s), Space = pause/resume | "
+           L"Split here cuts a manual boundary while paused (orange marker, right-click it to delete)"));
 }
 
 void MainWindow::UpdateButtonStates()
@@ -1096,12 +1188,76 @@ void MainWindow::StartSegmentPreview(int itemIndex, int segIndex)
     if (segIndex < 0 || segIndex >= (int)it.segments.size()) return;
 
     const Segment& s = it.segments[segIndex];
+    previewItem_ = itemIndex;      // "插入分割"按钮要写回这张表
+    previewPath_ = it.path;
     preview_.SetFfmpeg(ffmpeg_.paths().ffmpeg);
     preview_.Play(it.path, s.t0, s.t1,
                   it.info.width, it.info.height, it.info.fps, it.info.hasAudio,
                   FormatString(TR(L"%s · 第 %d 段%s", L"%s - part %d%s"),
                                it.name.c_str(), segIndex + 1,
                                s.kind == SegKind::Black ? TR(L"（黑屏）", L" (black)") : L""));
+}
+
+// ---------------------------------------------------------------------------
+// 手动分割
+//
+// 黑屏检测出来的分界是自动的，转场太紧凑的片子根本没有黑屏帧，只能由人在
+// 预览窗暂停后手工切一刀（或把切错的那刀撤掉）。
+// ---------------------------------------------------------------------------
+void MainWindow::OnSegmentsChanged(int itemIndex)
+{
+    timeline_.Refresh();
+    if (itemIndex >= 0 && itemIndex < (int)project_.items.size())
+        UpdateListRow(itemIndex);
+    UpdateTitles();
+    UpdateButtonStates();
+    preview_.RefreshButtons();      // "插入分割" <-> "删除分割" 跟着换
+}
+
+void MainWindow::OnPreviewSplit()
+{
+    if (previewItem_ < 0 || previewItem_ >= (int)project_.items.size()) return;
+    VideoItem& it = project_.items[previewItem_];
+    if (it.path != previewPath_) { previewItem_ = -1; return; }   // 列表已经变了
+    if (!it.isAnalysed()) return;
+
+    const double t = preview_.Position();
+
+    if (Project::HasManualSplitNear(it, t))
+    {
+        DeleteManualSplit(previewItem_, Project::ManualSplitNear(it, t));
+        return;
+    }
+
+    std::wstring why;
+    if (!Project::InsertManualSplit(it, t, &why))
+    {
+        AppendLog(FormatString(TR(L"插入分割失败：%s @ %s —— %s",
+                                 L"Cannot insert a split: %s @ %s - %s"),
+                               it.name.c_str(), FormatTimecode(t).c_str(), why.c_str()));
+        return;
+    }
+
+    AppendLog(FormatString(TR(L"已插入手动分割：%s @ %s（共 %d 处，右键标记可删除）",
+                             L"Manual split inserted: %s @ %s (%d total, right-click the marker to remove)"),
+                           it.name.c_str(), FormatTimecode(t).c_str(),
+                           (int)it.manualSplits.size()));
+    OnSegmentsChanged(previewItem_);
+}
+
+void MainWindow::DeleteManualSplit(int itemIndex, int splitIndex)
+{
+    if (itemIndex < 0 || itemIndex >= (int)project_.items.size()) return;
+    VideoItem& it = project_.items[itemIndex];
+    if (splitIndex < 0 || splitIndex >= (int)it.manualSplits.size()) return;
+
+    const double t = it.manualSplits[(size_t)splitIndex];
+    if (!Project::RemoveManualSplitNear(it, t)) return;
+
+    AppendLog(FormatString(TR(L"已删除手动分割：%s @ %s",
+                             L"Manual split removed: %s @ %s"),
+                           it.name.c_str(), FormatTimecode(t).c_str()));
+    OnSegmentsChanged(itemIndex);
 }
 
 // ---------------------------------------------------------------------------
@@ -1152,6 +1308,40 @@ void MainWindow::Notify(const std::wstring& text, UINT flags)
         return;
     }
     ::MessageBoxW(hwnd_, text.c_str(), L"FastVideoCut", flags);
+}
+
+// ---------------------------------------------------------------------------
+// ffmpeg missing
+// ---------------------------------------------------------------------------
+// 对用户来说“检测点不动 / 导出点不动”是最困惑的失败：按钮是灰的（UpdateButtonStates
+// 已经按 hasFf 置灰），但看不出原因。所以三个地方统一处理：
+//   · 启动时 WarnFfmpegMissingOnStartup：只提示一次，告诉去哪装、装完放哪
+//   · 点检测 / 点导出 / 单个重分析时 RequireFfmpeg：拦下来并给出同样的安装引导
+// --nogui 下不弹窗，只写日志（批处理不能被对话框卡住）。
+bool MainWindow::RequireFfmpeg(const wchar_t* what)
+{
+    if (ffmpeg_.available()) return true;
+    const std::wstring msg = FfmpegMissingText(what);
+    AppendLog(msg);
+    SetStatus(TR(L"未找到 ffmpeg：请安装后在“设置”里指定路径",
+                 L"ffmpeg not found: install it, then set the path in Settings"));
+    if (AskOpenFfmpegDownloadPage(hwnd_, msg))
+        AppendLog(TR(L"已打开官方下载页：", L"Opened the official download page: ") + std::wstring(kFfmpegDownloadUrl));
+    return false;
+}
+
+void MainWindow::WarnFfmpegMissingOnStartup()
+{
+    if (ffmpeg_.available() || args_.noGui) return;
+    if (!::IsWindowVisible(hwnd_)) return;
+    const std::wstring msg = FfmpegMissingText(TR(L"启动（缺少后端工具）", L"start (backend tools missing)"));
+    AppendLog(msg);
+    SetStatus(TR(L"未找到 ffmpeg：请安装后在“设置”里指定路径",
+                 L"ffmpeg not found: install it, then set the path in Settings"));
+    if (AskOpenFfmpegDownloadPage(hwnd_, msg))
+        AppendLog(TR(L"已打开官方下载页：", L"Opened the official download page: ") + std::wstring(kFfmpegDownloadUrl));
+    UpdateButtonStates();
+    UpdateTitles();
 }
 
 void MainWindow::SetBusy(bool busy, const std::wstring& text)
@@ -1289,10 +1479,22 @@ void MainWindow::OnCommand(int id)
         int sel = SelectedItem();
         if (sel >= 0)
         {
+            bool previewGone = (sel == previewItem_);
             project_.RemoveAt(sel);
-            RebuildList();
-            int newSel = (sel < (int)project_.items.size()) ? sel : (int)project_.items.size() - 1;
-            timeline_.SetCurrentItem(newSel);
+            // RebuildList() 默认会选中第 0 行 —— 必须把目标行号传进去，
+            // 否则 ListView 的选中停在第 0 行，下一次移除就删错视频。
+            // （移除下标 sel 后，原来 sel+1 处的视频顶到 sel；删的是最后一个就往前退一格。）
+            int newSel = sel;
+            if (newSel >= (int)project_.items.size())
+                newSel = (int)project_.items.size() - 1;
+            RebuildList(newSel);
+            if (previewGone)
+            {
+                // 预览的正是被移除的视频：停掉它，否则进度条还指着一个不存在的分段
+                preview_.Stop();
+                previewItem_ = -1;
+                previewPath_.clear();
+            }
             timeline_.Refresh();
         }
         break;
@@ -1309,9 +1511,12 @@ void MainWindow::OnCommand(int id)
                               MB_ICONQUESTION | MB_YESNO) != IDYES)
                 return;
             project_.Clear();
-            RebuildList();
+            RebuildList(-1);            // 列表空了，不能再选中任何行
             timeline_.SetCurrentItem(-1);
             timeline_.Refresh();
+            preview_.Stop();            // 预览的正是被清空的视频，不能再播了
+            previewItem_ = -1;
+            previewPath_.clear();
             AppendLog(TR(L"已清空视频列表", L"Video list cleared"));
         }
         break;
@@ -1440,13 +1645,13 @@ void MainWindow::OnCommand(int id)
 
     case IDM_HELP_ABOUT:
         ::MessageBoxW(hwnd_,
-                      TR(L"FastVideoCut 1.4.0\n\n"
+                      TR(L"FastVideoCut 1.4.8\n\n"
                          L"用 ffmpeg 做后端的黑屏自动剪辑工具：\n"
                          L"  · 黑屏检测 blackdetect\n"
                          L"  · 帧流缩略图 tile 快速展开\n"
                          L"  · 无损剪切 -c copy + concat 合并\n\n"
                          L"界面: Win32 / C++ (VC++)    后端: ffmpeg.exe",
-                         L"FastVideoCut 1.4.0\n\n"
+                         L"FastVideoCut 1.4.8\n\n"
                          L"Black frame auto cutter built on ffmpeg:\n"
                          L"  - black frame detection (blackdetect)\n"
                          L"  - timeline thumbnails via tile mosaics\n"
@@ -1569,12 +1774,7 @@ void MainWindow::StartDetect(bool forceAll)
                     L"Add some video files first (button or drag & drop)."), MB_ICONINFORMATION);
         return;
     }
-    if (!ffmpeg_.available())
-    {
-        Notify(L"没有找到 ffmpeg.exe / ffprobe.exe。\n\n"
-               L"请把 ffmpeg 的 bin 目录放到程序目录下，或在“设置”里指定路径。", MB_ICONWARNING);
-        return;
-    }
+    if (!RequireFfmpeg(TR(L"检测黑屏", L"detect black frames"))) return;
 
     // 默认跳过已经检测过的视频（新增/移除文件后再点检测不会全部重算）
     if (!forceAll && Project::PendingDetect(project_, false).empty())
@@ -1609,15 +1809,7 @@ void MainWindow::StartDetectOne(int index)
              MB_ICONINFORMATION);
         return;
     }
-    if (!ffmpeg_.available())
-    {
-        Notify(TR(L"没有找到 ffmpeg.exe / ffprobe.exe。\n\n"
-                     L"请把 ffmpeg 的 bin 目录放到程序目录下，或在“设置”里指定路径。",
-                     L"ffmpeg.exe / ffprobe.exe not found.\n\n"
-                     L"Put the ffmpeg bin folder next to the exe, or set it in Settings."),
-                 MB_ICONWARNING);
-        return;
-    }
+    if (!RequireFfmpeg(TR(L"重新分析", L"re-analyse"))) return;
 
     // 不打断“检测完自动导出”的批处理链
     StartJobInternal(JobDetect, true, index);
@@ -1800,13 +1992,7 @@ void MainWindow::StartExport(int job)
         Notify(TR(L"请先添加视频文件。", L"Add some video files first."), MB_ICONINFORMATION);
         return;
     }
-    if (!ffmpeg_.available())
-    {
-        Notify(TR(L"没有找到 ffmpeg.exe / ffprobe.exe，无法导出。",
-                     L"ffmpeg.exe / ffprobe.exe not found, cannot export."),
-                 MB_ICONWARNING);
-        return;
-    }
+    if (!RequireFfmpeg(TR(L"导出", L"export"))) return;
 
     int pending = 0;
     for (size_t i = 0; i < project_.items.size(); ++i)
@@ -2462,6 +2648,7 @@ void MainWindow::ShowSettingsDialog()
 {
     const AppLang oldLang    = settings_.lang;
     const bool    oldThumbs  = settings_.makeThumbs;
+    const std::wstring oldFfDir = settings_.ffmpegDir;
     if (ShowSettingsDialogModal(hwnd_, settings_, ffmpeg_))
     {
         settingsDirty_ = true;
@@ -2474,6 +2661,26 @@ void MainWindow::ShowSettingsDialog()
             Loc::Apply(settings_.lang);
             ApplyLanguage();
             AppendLog(FormatString(L"界面语言：%s", Loc::Describe(settings_.lang).c_str()));
+        }
+        // 用户刚在设置里改了 ffmpeg 目录：立刻按新目录重定位，并给一句明确反馈。
+        // 否则“设置里填好了，按钮还是灰的”会让人以为设置没生效。
+        if (settings_.ffmpegDir != oldFfDir)
+        {
+            ffmpeg_.Locate(settings_.ffmpegDir);
+            if (ffmpeg_.available())
+            {
+                settings_.ffmpegDir = ffmpeg_.paths().binDir;
+                SaveSettings(settings_);
+                preview_.SetFfmpeg(ffmpeg_.paths().ffmpeg);
+                AppendLog(FormatString(TR(L"已找到 ffmpeg：%s", L"ffmpeg found: %s"),
+                                       ffmpeg_.paths().binDir.c_str()));
+            }
+            else
+            {
+                AppendLog(FfmpegMissingText(TR(L"应用新设置", L"apply the new settings")));
+                Notify(FfmpegMissingText(TR(L"应用新设置", L"apply the new settings")),
+                       MB_ICONWARNING);
+            }
         }
         if (settings_.makeThumbs != oldThumbs)
         {

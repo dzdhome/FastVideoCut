@@ -1,6 +1,7 @@
 # FastVideoCut
 
 Win32 / C++17 桌面工具：用 `ffmpeg` 做**黑屏自动检测**、**帧流缩略图时间线**，并进行**无损裁剪 / 合并**。
+<img width="1919" height="1030" alt="图片" src="https://github.com/user-attachments/assets/937fb68e-2cc2-4ecf-9bfa-f5edc648312f" />
 
 ## 功能
 

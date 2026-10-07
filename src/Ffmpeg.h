@@ -133,14 +133,18 @@ struct BlackParams
     double minDuration    = 0.10;   // blackdetect d=
     double pixThreshold   = 0.10;   // blackdetect pix_th=
     double picThreshold   = 0.98;   // blackdetect pic_th=
-    // Only a slice of the file is scanned (the intro / outro boundaries almost
-    // always sit near its ends). The two sides are configured on their own,
-    // because an intro is usually much shorter than the outro, or vice versa:
-    //   > 0 = only that many seconds at the head / at the tail
-    //   = 0 = that side is not scanned at all (head 180 / tail 0 = first 180 s)
-    //   < 0 = no limit on that side -> the whole file is scanned
-    double headScanSec    = 180.0;
-    double tailScanSec    = 180.0;
+    // ---- scan ranges (integer seconds, straight from Settings) ----
+    //   head: absolute interval [headStartSec, headEndSec] from the file start
+    //   tail: interval measured backwards from the file end,
+    //         [duration - tailBackMaxSec, duration - tailBackMinSec]
+    //   headEndSec / tailBackMaxSec < 0 = no limit on that side (kept for the
+    //         legacy CLI / INI value -1 = whole file)
+    // The two intervals are checked for overlap in DetectBlack; overlapping or
+    // touching intervals are merged into a single scan window.
+    int headStartSec   = 0;        // 片头范围: 起始
+    int headEndSec     = 180;      // 片头范围: 结束
+    int tailBackMaxSec = 180;      // 片尾范围: 从片尾倒退最大
+    int tailBackMinSec = 0;        // 片尾范围: 从片尾倒退最小
 };
 
 // Options for stream-copy (lossless) or re-encoded output.

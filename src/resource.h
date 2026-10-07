@@ -102,6 +102,8 @@
 #define IDC_SET_TAILSCAN       42027   // 只扫片尾多少秒（0 = 该侧不限制）
 #define IDC_SET_LANG           42028   // 界面语言
 #define IDC_SET_THUMBS         42029   // 生成视频流缩略图
+#define IDC_SET_HEADSTART      42048   // 片头范围: 起始（42030-42047 被 LB_* 占用）
+#define IDC_SET_TAILBACKMIN    42049   // 片尾范围: 从片尾倒退最小
 
 // ---- merge pre-check dialog ------------------------------------------------
 // MessageBoxW 的按钮文字和顺序是写死的，没法把“智能合并”放到最左边，

@@ -37,10 +37,15 @@ struct AppSettings
     double blackMinDuration      = 0.10;
     double blackPixTh            = 0.10;
     double blackPicTh            = 0.98;
-    // 只扫描片头/片尾各多少秒（片头结束/片尾开始基本都在这里），两侧可分别设置：
-    //   > 0 = 该侧只扫这么多秒；= 0 = 该侧完全不扫；< 0 = 该侧不限制（整段扫描）
-    double blackHeadScan          = 180.0;
-    double blackTailScan          = 180.0;
+    // 片头/片尾扫描范围（整数秒），两段重叠或相接时自动合并成一段扫描：
+    //   片头 = 视频绝对时间 [blackHeadStart, blackHeadEnd]
+    //   片尾 = 从片尾倒退 [blackTailBackMax, blackTailBackMin]，
+    //          即 [时长-blackTailBackMax, 时长-blackTailBackMin]
+    //   blackHeadEnd / blackTailBackMax < 0 = 该侧不限制（兼容旧配置负数 = 整段）
+    int    blackHeadStart         = 0;
+    int    blackHeadEnd           = 180;
+    int    blackTailBackMax       = 180;
+    int    blackTailBackMin       = 0;
 
     // timeline
     int    thumbHeight           = 64;

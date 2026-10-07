@@ -239,16 +239,27 @@ bool MainWindow::Create(HINSTANCE hInst, const AppArgs& args)
     if (args_.blackPix > 0.0)     settings_.blackPixTh = args_.blackPix;
     if (args_.blackPic > 0.0)     settings_.blackPicTh = args_.blackPic;
     // --scan-window 一次设置两侧，--scan-head/--scan-tail 可再单独覆盖。
-    // 0 = 该侧完全不扫，负数 = 该侧不限制（整段）。兼容旧版：--scan-window 0
+    // CLI 语义保持旧版：N = 只扫该侧 N 秒（0 = 不扫，负数 = 不限），映射到新范围：
+    //   片头 [0, N]；片尾从片尾倒退 [N, 0]。兼容旧版：--scan-window 0
     // 过去表示“整段扫描”，这里仍按整段处理，老脚本不会突然什么都不扫。
     if (args_.scanWindow != kScanUnset)
     {
-        double v = (args_.scanWindow == 0.0) ? -1.0 : args_.scanWindow;
-        settings_.blackHeadScan = v;
-        settings_.blackTailScan = v;
+        int v = (args_.scanWindow == 0.0) ? -1 : (int)args_.scanWindow;
+        settings_.blackHeadStart   = 0;
+        settings_.blackHeadEnd     = v;
+        settings_.blackTailBackMax = v;
+        settings_.blackTailBackMin = 0;
     }
-    if (args_.scanHead != kScanUnset) settings_.blackHeadScan = args_.scanHead;
-    if (args_.scanTail != kScanUnset) settings_.blackTailScan = args_.scanTail;
+    if (args_.scanHead != kScanUnset)
+    {
+        settings_.blackHeadStart = 0;
+        settings_.blackHeadEnd   = (int)args_.scanHead;
+    }
+    if (args_.scanTail != kScanUnset)
+    {
+        settings_.blackTailBackMax = (int)args_.scanTail;
+        settings_.blackTailBackMin = 0;
+    }
     if (args_.reencode)           settings_.reencodeExport = true;
     if (!args_.output.empty())    settings_.outputDir = PathGetDirectory(PathGetFull(args_.output));
 
@@ -2138,8 +2149,10 @@ void MainWindow::JobThreadMain(int job, bool detectAll, int onlyIndex)
         bp.minDuration  = settings_.blackMinDuration;
         bp.pixThreshold = settings_.blackPixTh;
         bp.picThreshold = settings_.blackPicTh;
-        bp.headScanSec  = settings_.blackHeadScan;
-        bp.tailScanSec  = settings_.blackTailScan;
+        bp.headStartSec   = settings_.blackHeadStart;
+        bp.headEndSec     = settings_.blackHeadEnd;
+        bp.tailBackMaxSec = settings_.blackTailBackMax;
+        bp.tailBackMinSec = settings_.blackTailBackMin;
 
         // 默认只检测还没分析过的视频（已经检测过的直接跳过，保留原结果）；
         // onlyIndex >= 0 时只重跑这一个。

@@ -90,11 +90,12 @@ namespace
         SetText(dlg, IDC_SET_LB_PIXTH,    TR(L"像素阈值 pix_th", L"Pixel threshold pix_th"));
         SetText(dlg, IDC_SET_LB_PICTH,    TR(L"比例阈值 pic_th", L"Picture threshold pic_th"));
         SetText(dlg, IDC_SET_LB_THUMBH,   TR(L"缩略图高(像素)", L"Thumbnail height (px)"));
-        SetText(dlg, IDC_SET_LB_HEADSCAN, TR(L"只扫片头(秒)", L"Head scan (s)"));
-        SetText(dlg, IDC_SET_LB_TAILSCAN, TR(L"只扫片尾(秒)", L"Tail scan (s)"));
+        SetText(dlg, IDC_SET_LB_HEADSCAN, TR(L"片头范围(秒)", L"Head range (s)"));
+        SetText(dlg, IDC_SET_LB_TAILSCAN, TR(L"片尾范围(秒)", L"Tail range (s)"));
         SetText(dlg, IDC_SET_LB_SCANHINT,
-                TR(L"0 = 该侧完全不扫，负数 = 该侧不限制（整段扫描）",
-                   L"0 = do not scan that side, negative = no limit (whole file)"));
+                TR(L"片头从视频开头算起，片尾从视频结尾倒退；两段重叠或相接时自动合并成一段扫描",
+                   L"Head counts from the start, tail counts backwards from the end; "
+                   L"overlapping or touching ranges are merged into one scan"));
         SetText(dlg, IDC_SET_LB_EXPORT,   TR(L"---- 导出参数 ----", L"---- Export ----"));
         SetText(dlg, IDC_SET_LB_CRF,      L"CRF");
         SetText(dlg, IDC_SET_LB_PRESET,   L"preset");
@@ -153,8 +154,10 @@ namespace
         SetText(dlg, IDC_SET_MINDUR, NumberText(s.blackMinDuration, 2));
         SetText(dlg, IDC_SET_PIXTH, NumberText(s.blackPixTh, 2));
         SetText(dlg, IDC_SET_PICTH, NumberText(s.blackPicTh, 2));
-        SetText(dlg, IDC_SET_HEADSCAN, NumberText(s.blackHeadScan, 0));
-        SetText(dlg, IDC_SET_TAILSCAN, NumberText(s.blackTailScan, 0));
+        SetText(dlg, IDC_SET_HEADSTART, NumberText(s.blackHeadStart, 0));
+        SetText(dlg, IDC_SET_HEADSCAN, NumberText(s.blackHeadEnd, 0));
+        SetText(dlg, IDC_SET_TAILSCAN, NumberText(s.blackTailBackMax, 0));
+        SetText(dlg, IDC_SET_TAILBACKMIN, NumberText(s.blackTailBackMin, 0));
         ::CheckDlgButton(dlg, IDC_SET_THUMBS, s.makeThumbs ? BST_CHECKED : BST_UNCHECKED);
         SetText(dlg, IDC_SET_THUMBH, FormatString(L"%d", s.thumbHeight));
         SetText(dlg, IDC_SET_CRF, FormatString(L"%d", s.crf));
@@ -226,21 +229,37 @@ namespace
                 s->blackMinDuration = GetDouble(dlg, IDC_SET_MINDUR, s->blackMinDuration);
                 s->blackPixTh       = GetDouble(dlg, IDC_SET_PIXTH, s->blackPixTh);
                 s->blackPicTh       = GetDouble(dlg, IDC_SET_PICTH, s->blackPicTh);
-                s->blackHeadScan    = GetDouble(dlg, IDC_SET_HEADSCAN, s->blackHeadScan);
-                s->blackTailScan    = GetDouble(dlg, IDC_SET_TAILSCAN, s->blackTailScan);
-                // 0 = 该侧完全不扫，负数 = 该侧不限制。两侧都是 0 就没有任何区域可扫，
-                // 与其默默扫出 0 段黑屏，不如直接拦下来告诉用户怎么填。
-                if (s->blackHeadScan == 0.0 && s->blackTailScan == 0.0)
+                s->blackHeadStart   = GetInt(dlg, IDC_SET_HEADSTART, s->blackHeadStart);
+                s->blackHeadEnd     = GetInt(dlg, IDC_SET_HEADSCAN, s->blackHeadEnd);
+                s->blackTailBackMax = GetInt(dlg, IDC_SET_TAILSCAN, s->blackTailBackMax);
+                s->blackTailBackMin = GetInt(dlg, IDC_SET_TAILBACKMIN, s->blackTailBackMin);
+                // 起始 / 倒退最小必须 >= 0（输入框限定了数字，这里兜底）；
+                // 片头结束 / 倒退最大允许负数 = 该侧不限制（兼容手改 INI）。
+                if (s->blackHeadStart < 0) s->blackHeadStart = 0;
+                if (s->blackTailBackMin < 0) s->blackTailBackMin = 0;
+                // 区间必须自洽。相等 = 该侧不扫（合法）；两个范围都空 = 没有任何
+                // 区域可扫，与其默默扫出 0 段黑屏，不如直接拦下来告诉用户怎么填。
+                bool headBad = (s->blackHeadEnd >= 0) &&
+                               (s->blackHeadStart > s->blackHeadEnd);
+                bool tailBad = (s->blackTailBackMax >= 0) &&
+                               (s->blackTailBackMax < s->blackTailBackMin);
+                bool headEmpty = (s->blackHeadEnd >= 0) &&
+                                 (s->blackHeadStart >= s->blackHeadEnd);
+                bool tailEmpty = (s->blackTailBackMax >= 0) &&
+                                 (s->blackTailBackMax <= s->blackTailBackMin);
+                if (headBad || tailBad || (headEmpty && tailEmpty))
                 {
                     ::MessageBoxW(dlg,
-                        TR(L"“只扫片头”和“只扫片尾”不能同时填 0，那样没有任何区域会被检测。\n\n"
-                           L"· 想只扫一侧：另一侧填 0（例如片头 180 / 片尾 0 = 只扫前 180 秒）\n"
-                           L"· 想整段检测：任意一侧填负数（例如 -1 = 该侧不限制）",
-                           L"Head and tail cannot both be 0 - nothing would be scanned.\n\n"
-                           L"- Scan one side only: set the other one to 0\n"
-                           L"  (head 180 / tail 0 = first 180 seconds only)\n"
-                           L"- Scan the whole file: set either one to a negative number\n"
-                           L"  (e.g. -1 = no limit on that side)"),
+                        TR(L"扫描范围填写有误，没有任何区域会被检测。\n\n"
+                           L"· 片头范围：起始 <= 结束（起始填 0 = 从视频开头扫）\n"
+                           L"· 片尾范围：倒退最大 >= 倒退最小（倒退最小填 0 = 扫到片尾）\n"
+                           L"· 两侧范围不能同时为空（相等 = 该侧不扫）\n"
+                           L"· 两段范围重叠时会自动合并成一段，中间不会有漏扫",
+                           L"Invalid scan range - nothing would be scanned.\n\n"
+                           L"- Head range: start <= end (start 0 = from the beginning)\n"
+                           L"- Tail range: back max >= back min (back min 0 = to the end)\n"
+                           L"- The two ranges must not both be empty (equal = that side is skipped)\n"
+                           L"- Overlapping ranges are merged into one scan, nothing is missed"),
                         TR(L"FastVideoCut 设置", L"FastVideoCut Settings"),
                         MB_ICONWARNING | MB_OK);
                     return TRUE;

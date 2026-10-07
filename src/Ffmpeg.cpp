@@ -906,11 +906,15 @@ bool Ffmpeg::ScanWindow(const std::wstring& file, double t0, double dur,
 }
 
 // Long videos only decode a slice of the file, because the intro / outro
-// boundaries almost always sit near its ends. Each side is configured on its own
-// (an intro is usually much shorter than the outro, or the other way round):
-//   > 0 = only that many seconds at the head / at the tail
-//   = 0 = that side is not scanned at all (head 180 / tail 0 = first 180 s only)
-//   < 0 = no limit on that side -> the whole file is scanned
+// boundaries almost always sit near its ends. Two intervals are configured
+// (integer seconds, see BlackParams):
+//   head: [headStartSec, headEndSec]                      (from the file start)
+//   tail: [duration - tailBackMaxSec, duration - tailBackMinSec]
+//                                                (backwards from the file end)
+//   headEndSec / tailBackMaxSec < 0 = no limit on that side -> whole file side
+// When the two intervals overlap or touch they are merged into a single scan
+// window: one ffmpeg pass is cheaper than two, and with -copyts the reported
+// timestamps stay absolute either way, so the result is identical.
 bool Ffmpeg::DetectBlack(const std::wstring& file, double duration,
                          const BlackParams& p,
                          std::vector<BlackRange>& out,
@@ -926,31 +930,56 @@ bool Ffmpeg::DetectBlack(const std::wstring& file, double duration,
         return false;
     }
 
-    const double head = p.headScanSec;
-    const double tail = p.tailScanSec;
-
     std::vector<std::pair<double, double> > windows;
-    if (duration <= 0.0 || head < 0.0 || tail < 0.0 || head + tail >= duration)
+    if (duration <= 0.0)
     {
-        // 时长未知、某一侧不限，或两个窗口加起来已经盖住整段 -> 一次整段扫完
+        // 时长未知 -> 不加 -t，一次扫完整个文件（ScanWindow 的约定）
         windows.push_back(std::make_pair(0.0, duration));
     }
     else
     {
-        // 两个窗口都不会越过片尾，也不会互相重叠（上面已保证 head + tail < duration）
-        if (head > 0.0) windows.push_back(std::make_pair(0.0, head));
-        if (tail > 0.0) windows.push_back(std::make_pair(duration - tail, tail));
+        // 片头区间（绝对时间），clamp 到 [0, duration]
+        double h0 = p.headStartSec;
+        double h1 = (p.headEndSec < 0) ? duration : (double)p.headEndSec;
+        if (h0 < 0.0) h0 = 0.0;
+        if (h1 > duration) h1 = duration;
+
+        // 片尾区间：由“从片尾倒退多少秒”换算成绝对时间
+        double t0 = (p.tailBackMaxSec < 0) ? 0.0
+                                           : duration - (double)p.tailBackMaxSec;
+        double t1 = duration - (double)p.tailBackMinSec;
+        if (t0 < 0.0) t0 = 0.0;
+        if (t1 > duration) t1 = duration;
+
+        const bool headValid = (h0 < h1);            // 起始 < 结束才有得扫
+        const bool tailValid = (t0 < t1);
+
+        if (headValid && tailValid)
+        {
+            if (h1 >= t0)    // 重叠或刚好相接 -> 合并成一段
+                windows.push_back(std::make_pair((h0 < t0) ? h0 : t0,
+                                                 (h1 > t1) ? h1 : t1));
+            else             // 中间隔着没配到的区域 -> 各扫各的
+            {
+                windows.push_back(std::make_pair(h0, h1));
+                windows.push_back(std::make_pair(t0, t1));
+            }
+        }
+        else if (headValid) windows.push_back(std::make_pair(h0, h1));
+        else if (tailValid) windows.push_back(std::make_pair(t0, t1));
     }
 
     if (windows.empty())
     {
-        // 两侧都是 0 = 没有任何可扫区域（设置界面已拦下，这里兜底）
-        err = "no scan window: head=0 and tail=0";
+        // 两个范围都是空的（设置界面已拦下，这里兜底）
+        err = "no scan window: head range and tail range are both empty";
         return false;
     }
 
+    // windows 存的是 (起点, 终点)——注意消费端按“终点 - 起点”换算时长
     double total = 0.0;
-    for (size_t i = 0; i < windows.size(); ++i) total += windows[i].second;
+    for (size_t i = 0; i < windows.size(); ++i)
+        total += windows[i].second - windows[i].first;
     if (total <= 0.0) total = 1.0;
 
     double done = 0.0;
@@ -959,7 +988,7 @@ bool Ffmpeg::DetectBlack(const std::wstring& file, double duration,
         if (cancel.IsCancelled()) { err = "cancelled"; return false; }
 
         double w0 = windows[i].first;
-        double wd = windows[i].second;
+        double wd = windows[i].second - windows[i].first;
         const double doneBefore = done;
 
         std::vector<BlackRange> part;

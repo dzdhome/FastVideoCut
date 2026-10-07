@@ -1257,8 +1257,8 @@ int wmain(int argc, wchar_t** argv)
 
             // (a) -1 / -1 -> no limit on either side -> whole file, all three black parts
             BlackParams pFull;
-            pFull.headScanSec = -1.0;
-            pFull.tailScanSec = -1.0;
+            pFull.headEndSec = -1;
+            pFull.tailBackMaxSec = -1;
             Check(ff.DetectBlack(clip, ci.duration, pFull, all, nullptr,
                                  CancelToken(), err), "full scan", Utf8ToWide(err));
             ::wprintf(L"       whole file: %d range(s)\n", (int)all.size());
@@ -1266,8 +1266,8 @@ int wmain(int argc, wchar_t** argv)
 
             // (b) 10 s windows -> head and tail, but not the middle one
             BlackParams pEdge;
-            pEdge.headScanSec = 10.0;
-            pEdge.tailScanSec = 10.0;
+            pEdge.headEndSec = 10;
+            pEdge.tailBackMaxSec = 10;
             Check(ff.DetectBlack(clip, ci.duration, pEdge, edges, nullptr,
                                  CancelToken(), err), "head/tail scan", Utf8ToWide(err));
             ::wprintf(L"       10s windows: %d range(s)\n", (int)edges.size());
@@ -1287,8 +1287,8 @@ int wmain(int argc, wchar_t** argv)
             //      reaches the middle black while a narrow tail window still
             //      covers the outro - the two sides are truly independent
             BlackParams pSplit;
-            pSplit.headScanSec = 40.0;
-            pSplit.tailScanSec = 2.0;
+            pSplit.headEndSec = 40;
+            pSplit.tailBackMaxSec = 2;
             std::vector<BlackRange> split;
             Check(ff.DetectBlack(clip, ci.duration, pSplit, split, nullptr,
                                  CancelToken(), err), "split head/tail scan", Utf8ToWide(err));
@@ -1304,8 +1304,8 @@ int wmain(int argc, wchar_t** argv)
 
             // the mirror image: narrow head + wide tail must NOT reach the middle
             BlackParams pSplit2;
-            pSplit2.headScanSec = 3.0;
-            pSplit2.tailScanSec = 20.0;
+            pSplit2.headEndSec = 3;
+            pSplit2.tailBackMaxSec = 20;
             std::vector<BlackRange> split2;
             Check(ff.DetectBlack(clip, ci.duration, pSplit2, split2, nullptr,
                                  CancelToken(), err), "split head/tail scan (reversed)",
@@ -1318,8 +1318,8 @@ int wmain(int argc, wchar_t** argv)
 
             // (b3) 0 = that side is not scanned at all: head only
             BlackParams pHeadOnly;
-            pHeadOnly.headScanSec = 3.0;
-            pHeadOnly.tailScanSec = 0.0;       // 0 = the tail is not scanned
+            pHeadOnly.headEndSec = 3;
+            pHeadOnly.tailBackMaxSec = 0;   // back max 0 = the tail is not scanned
             std::vector<BlackRange> headOnly;
             Check(ff.DetectBlack(clip, ci.duration, pHeadOnly, headOnly, nullptr,
                                  CancelToken(), err), "head-only scan", Utf8ToWide(err));
@@ -1335,8 +1335,8 @@ int wmain(int argc, wchar_t** argv)
 
             // (b4) the mirror image: head = 0 scans the tail side only
             BlackParams pTailOnly;
-            pTailOnly.headScanSec = 0.0;
-            pTailOnly.tailScanSec = 20.0;
+            pTailOnly.headEndSec = 0;          // [0,0] empty = the head is not scanned
+            pTailOnly.tailBackMaxSec = 20;
             std::vector<BlackRange> tailOnly;
             Check(ff.DetectBlack(clip, ci.duration, pTailOnly, tailOnly, nullptr,
                                  CancelToken(), err), "tail-only scan", Utf8ToWide(err));
@@ -1353,13 +1353,81 @@ int wmain(int argc, wchar_t** argv)
             // (b5) both sides 0 -> there is nothing left to scan: fail loudly
             // instead of silently reporting "0 black segments"
             BlackParams pNone;
-            pNone.headScanSec = 0.0;
-            pNone.tailScanSec = 0.0;
+            pNone.headEndSec = 0;
+            pNone.tailBackMaxSec = 0;
             std::vector<BlackRange> none;
             std::string noneErr;
             Check(!ff.DetectBlack(clip, ci.duration, pNone, none, nullptr,
                                   CancelToken(), noneErr) && none.empty(),
                   "head 0 + tail 0 is refused", Utf8ToWide(noneErr));
+
+            // (b6) overlapping head/tail ranges are merged into ONE scan window:
+            //      head [0,45] overlaps tail [30,70] -> one [0,70] pass -> 3 blacks
+            BlackParams pMerge;
+            pMerge.headEndSec = 45;
+            pMerge.tailBackMaxSec = 40;
+            std::vector<BlackRange> merged;
+            Check(ff.DetectBlack(clip, ci.duration, pMerge, merged, nullptr,
+                                 CancelToken(), err), "merged head/tail scan",
+                  Utf8ToWide(err));
+            ::wprintf(L"       head [0,45] + tail [30,70]: %d range(s)\n",
+                      (int)merged.size());
+            Check(merged.size() == all.size(),
+                  "overlapping ranges are merged into one scan (same as full)");
+
+            //      head [0,35] touching tail [35,70] -> merged just the same
+            BlackParams pTouch;
+            pTouch.headEndSec = 35;
+            pTouch.tailBackMaxSec = 35;
+            std::vector<BlackRange> touched;
+            Check(ff.DetectBlack(clip, ci.duration, pTouch, touched, nullptr,
+                                 CancelToken(), err), "touching head/tail scan",
+                  Utf8ToWide(err));
+            Check(touched.size() == all.size(),
+                  "touching ranges are merged into one scan as well");
+
+            // (b7) head start > 0: the very beginning is never decoded
+            //      [3,28] covers neither black part (0-2 / 30-32) -> nothing found
+            BlackParams pSkip;
+            pSkip.headStartSec = 3;
+            pSkip.headEndSec = 28;
+            pSkip.tailBackMaxSec = 0;          // no tail
+            std::vector<BlackRange> skipped;
+            Check(ff.DetectBlack(clip, ci.duration, pSkip, skipped, nullptr,
+                                 CancelToken(), err), "head range start > 0",
+                  Utf8ToWide(err));
+            ::wprintf(L"       head [3,28] / no tail: %d range(s)\n", (int)skipped.size());
+            for (size_t i = 0; i < skipped.size(); ++i)
+                ::wprintf(L"         %.2f -> %.2f\n", skipped[i].start, skipped[i].end);
+            Check(skipped.empty(),
+                  "black before the head start is never scanned");
+
+            //      start inside a black part: [1,28] picks up the rest of 0-2
+            pSkip.headStartSec = 1;
+            std::vector<BlackRange> mid;
+            Check(ff.DetectBlack(clip, ci.duration, pSkip, mid, nullptr,
+                                 CancelToken(), err), "head range inside a black part",
+                  Utf8ToWide(err));
+            Check(mid.size() == 1 && mid[0].start >= 0.9 && mid[0].end <= 2.6,
+                  "scan starting inside a black reports only what it saw");
+
+            // (b8) tail back range: only [60,65] (back off 10 ~ 5 s) is scanned,
+            //      so the report must stop at 65 even though the black runs to 70
+            BlackParams pBack;
+            pBack.headEndSec = 0;              // no head
+            pBack.tailBackMaxSec = 10;
+            pBack.tailBackMinSec = 5;
+            std::vector<BlackRange> back;
+            Check(ff.DetectBlack(clip, ci.duration, pBack, back, nullptr,
+                                 CancelToken(), err), "tail back range",
+                  Utf8ToWide(err));
+            ::wprintf(L"       tail back max 10 / min 5: %d range(s)\n", (int)back.size());
+            for (size_t i = 0; i < back.size(); ++i)
+                ::wprintf(L"         %.2f -> %.2f\n", back[i].start, back[i].end);
+            Check(back.size() == 1 &&
+                  back[0].start >= 59.0 && back[0].start <= 61.0 &&
+                  back[0].end >= 63.0 && back[0].end <= 66.0,
+                  "tail range stops before the very end");
 
             // (c) every reported range must belong to the full scan
             bool subset = true;
@@ -1381,8 +1449,8 @@ int wmain(int argc, wchar_t** argv)
 
             // (d) a clip shorter than head+tail is scanned completely
             BlackParams pBig;
-            pBig.headScanSec = 1000.0;     // longer than the file
-            pBig.tailScanSec = 1000.0;
+            pBig.headEndSec = 1000;         // longer than the file
+            pBig.tailBackMaxSec = 1000;
             Check(ff.DetectBlack(clip, ci.duration, pBig, shortAll, nullptr,
                                  CancelToken(), err), "short clip scan", Utf8ToWide(err));
             Check(shortAll.size() == all.size(),

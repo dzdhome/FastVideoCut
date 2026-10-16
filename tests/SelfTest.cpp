@@ -700,6 +700,31 @@ int wmain(int argc, wchar_t** argv)
         // HasRange() 会变成 false，于是滑块根本显示不出来。
         bar.SetRange(0, 600 - 400, 400);
         Check(!bar.HasRange(), "passing a max scroll offset instead of the content size is wrong");
+
+        // 滑块长度按 page/content 缩放。600 的内容里看得见 400，滑块就该占轨道
+        // 的 2/3；按"可滚动量"(600-400+1=201) 缩放会算出 400*300/201 ≈ 597，
+        // 被 min(track, …) 截成整条轨道 —— 整条变成一块灰，看起来就是"没有滑块"。
+        // 帧流的竖条以前正是这个病，所以这里把比例也钉死。
+        Check(ScrollBarView::ThumbLengthFor(300, 0, 600, 400) == 200,
+              "the thumb is sized by page/content (two thirds here)");
+        Check(ScrollBarView::ThumbLengthFor(300, 0, 600, 400) != 300,
+              "barely overflowing content must not fill the whole track");
+        Check(ScrollBarView::ThumbLengthFor(300, 0, 1000, 10) == 18,
+              "a tiny viewport still gets the grabbable minimum");
+        Check(ScrollBarView::ThumbLengthFor(300, 0, 300, 400) == 300,
+              "content that fits fills the whole track");
+        Check(ScrollBarView::ThumbLengthFor(300, 0, 600, 10000) == 300,
+              "content that fits is a full track whatever the page size");
+        Check(ScrollBarView::ThumbLengthFor(0, 0, 600, 400) == 0,
+              "no track, no thumb");
+
+        // 只要还能滚，滑块就得留出看得见的间隙。内容只比视口多 1 像素时，
+        // 按比例算是 600*300/601 = 299（几乎整条轨道全灰），看起来还是没有滑块，
+        // 所以滑块最长只能到"轨道长 - kMinThumb"。
+        Check(ScrollBarView::ThumbLengthFor(300, 0, 601, 600) == 300 - 18,
+              "a barely overflowing view still leaves a visible gap");
+        Check(ScrollBarView::ThumbLengthFor(300, 0, 601, 600) < 300,
+              "the thumb never covers the whole track while scrolling is possible");
     }
 
     // 检测黑屏：默认只处理还没分析过的视频（新增/移除文件后不用全部重算）

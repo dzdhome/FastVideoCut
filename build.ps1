@@ -4,6 +4,14 @@
 #   .\build.ps1            build both binaries (debug)
 #   .\build.ps1 -Test      build and run the self test
 #   .\build.ps1 -Release   optimised build into dist\ (for GitHub releases)
+#   .\build.ps1 -Release -Pack
+#                           ... and zip dist\ as FastVideoCut-<version>-win64.zip
+#
+# The version the user sees lives in src\app.rc (FILEVERSION + the FileVersion /
+# ProductVersion strings) and in the About text in src\MainWindow.cpp. $version
+# below is the third copy, used for the archive name - -Pack refuses to run when
+# the three disagree, so a release cannot ship named "1.5.1" while its exe says
+# something else.
 #
 # Override the toolchain location with  -Mingw <dir>\mingw64\bin
 # ---------------------------------------------------------------------------
@@ -11,7 +19,8 @@ param(
     [string]$Mingw = 'C:\D\02_Tool\WinLibs\mingw64\bin',
     [string]$Ffmpeg = 'C:\D\02_Tool\ffmpeg-9.0.2-full_build\bin',
     [switch]$Test,
-    [switch]$Release
+    [switch]$Release,
+    [switch]$Pack
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,6 +29,10 @@ $outDir = if ($Release) { Join-Path $root 'dist' } else { Join-Path $root '_test
 $obj  = if ($Release) { Join-Path $root 'build\obj' } else { Join-Path $root '_test\obj' }
 $gxx  = Join-Path $Mingw 'g++.exe'
 $wres = Join-Path $Mingw 'windres.exe'
+
+# Version of this build; see the header. Bump it together with src\app.rc and the
+# About text, then -Pack will happily name the archive after it.
+$version = '1.5.1'
 
 if (!(Test-Path $gxx))  { throw "g++ not found: $gxx" }
 if (!(Test-Path $wres)) { throw "windres not found: $wres" }
@@ -30,7 +43,7 @@ New-Item -ItemType Directory -Force $outDir | Out-Null
 # always built -O2 so it still produces readable assertion output.
 $cxxflags = @('-std=c++17', '-Wall', '-Wextra', '-DUNICODE', '-D_UNICODE')
 if ($Release) {
-    $cxxflags += @('-O3', '-flto', '-fno-exceptions', '-DNDEBUG', '-DVERSION="1.4.8"')
+    $cxxflags += @('-O3', '-flto', '-fno-exceptions', '-DNDEBUG')
     # GCC's LTO pass reports -Wstringop-overread on std::wstring(L"") passed to
     # PostUiMessage (reading the NUL of an empty literal). Harmless, only noise.
     $cxxflags += '-Wno-stringop-overread'
@@ -104,6 +117,47 @@ Invoke-Tool $gxx (@('-std=c++17', '-Wall', '-Wextra', '-municode', '-O2') + $sta
 
 $sz = [math]::Round((Get-Item $gui).Length / 1KB)
 Write-Host ("OK  FastVideoCut.exe {0} KB   SelfTest.exe {1} KB" -f $sz, [math]::Round((Get-Item $st).Length / 1KB))
+
+# ---- optional release archive ----------------------------------------------
+# Packaging used to be an ad-hoc script that copied FastVideoCut.exe to a file
+# called "....zip": not an archive at all, and the exe inside had been built
+# before the version bump, so the archive contradicted its own name. So the step
+# lives here now, checks the version in all three places (and in the binary
+# itself) and verifies the entries it wrote.
+if ($Pack) {
+    if (!$Release) { throw '-Pack archives dist\, so it needs -Release' }
+
+    $dots = $version.Replace('.', ',')
+    $rc = Get-Content (Join-Path $root 'src\app.rc') -Raw
+    if ($rc -notmatch ('FILEVERSION ' + [regex]::Escape($dots))) {
+        throw "src\app.rc has no 'FILEVERSION $dots' (version is $version)"
+    }
+    $about = Get-Content (Join-Path $root 'src\MainWindow.cpp') -Raw
+    if ($about -notmatch [regex]::Escape("FastVideoCut $version")) {
+        throw "src\MainWindow.cpp About text does not mention $version"
+    }
+    $built = (Get-Item $gui).VersionInfo.FileVersion
+    if ($built -ne "$version.0") {
+        throw "$gui reports $built but version is $version.0 - bump the sources and rebuild"
+    }
+
+    $lic = Join-Path $outDir 'LICENSE.txt'
+    if (!(Test-Path $lic)) { Copy-Item (Join-Path $root 'LICENSE') $lic }
+
+    $zip = Join-Path $outDir ("FastVideoCut-$version-win64.zip")
+    Remove-Item $zip -Force -ErrorAction SilentlyContinue
+    Compress-Archive -Path @($gui, $st, $lic) -DestinationPath $zip -Force
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $za = [IO.Compression.ZipFile]::OpenRead($zip)
+    $entries = @($za.Entries | ForEach-Object { $_.FullName })
+    $za.Dispose()
+    foreach ($want in 'FastVideoCut.exe', 'SelfTest.exe', 'LICENSE.txt') {
+        if ($entries -notcontains $want) { throw "$zip is missing $want" }
+    }
+    Write-Host ("OK  {0}  {1} KB  [{2}]" -f (Split-Path $zip -Leaf),
+                [math]::Round((Get-Item $zip).Length / 1KB), ($entries -join ', '))
+}
 
 # ---- optional test run ------------------------------------------------------
 if ($Test) {

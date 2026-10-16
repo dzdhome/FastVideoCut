@@ -15,6 +15,15 @@
 // offset here instead makes the thumb size and HasRange() compute garbage - the
 // vertical timeline bar shipped with that exact bug for a while.
 //
+// The thumb length is page_ / (max_ - min_) - the fraction of the *content* that
+// fits on screen - while the thumb travel is scaled by the scroll extent
+// (max_ - min_ - page_ + 1). Sizing the thumb by that scroll extent instead
+// makes it full height as soon as the content is only slightly taller than the
+// viewport: the whole track turns into one grey block and it reads as "there is
+// no thumb at all". The timeline's vertical bar shipped with that bug too.
+// Whenever there is something to scroll the thumb also stops kMinThumb pixels
+// short of the full track, so the gap that shows where we are is always visible.
+//
 // Deliberately just a track and a thumb - no arrow buttons. The panes that use
 // it are only a few hundred pixels across, and the arrows ate width the
 // content could have used. The thumb darkens under the mouse and darker again
@@ -47,6 +56,11 @@ public:
     int  Value() const { return value_; }
 
     bool HasRange() const { return max_ - page_ + 1 > min_; }
+
+    // Pure geometry of the thumb, so the ratio can be pinned by the self test
+    // without a real window: `track` is the track length in pixels along the
+    // axis. See the page/content note at the top of this header.
+    static int ThumbLengthFor(int track, int minV, int maxV, int page);
 
     void Refresh();                    // repaint
 

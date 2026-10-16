@@ -82,15 +82,38 @@ int ScrollBarView::TrackLength() const
 
 int ScrollBarView::ThumbLength() const
 {
-    const int track = TrackLength();
+    return ThumbLengthFor(TrackLength(), min_, max_, page_);
+}
+
+// Pure math, so the self test can pin the ratio down without a real window
+// (TrackLength() needs a client rect, which only exists after Create()).
+int ScrollBarView::ThumbLengthFor(int track, int minV, int maxV, int page)
+{
     if (track <= 0) return 0;
 
-    const int range = max_ - min_ - page_ + 1;
-    if (range <= 0) return track;       // nothing to scroll: the thumb fills it
+    const int content = maxV - minV;    // the whole content, not the scroll extent
+    const int view    = (page < 1) ? 1 : page;
 
-    // Scale the thumb with the ratio, but never below kMinThumb - a stubby
-    // thumb the pointer keeps missing is worse than a slightly oversized one.
-    return std::min(track, std::max(kMinThumb, (page_ * track) / range));
+    // Nothing to scroll: the thumb fills the track. (The owners hide the bar in
+    // that case, this is just what the geometry says.)
+    if (content <= view) return track;
+
+    // Scale the thumb by the fraction of the content that is on screen - NOT by
+    // the scroll extent: with a scroll extent denominator the thumb is already
+    // full height when the content is barely taller than the viewport (7 rows in
+    // a 560 px viewport gave 560*558/35 -> clamped to the whole track, i.e. one
+    // grey block and "no thumb" for the user).
+    // Never below kMinThumb either - a stubby thumb the pointer keeps missing is
+    // worse than a slightly oversized one.
+    long long len = (long long)view * (long long)track / content;
+
+    // Something is scrollable, so leave a gap: a thumb that covers the whole
+    // track is indistinguishable from a bar with no thumb at all, and that is
+    // exactly what "one row too many" produced (content = viewport + 1 gives a
+    // one pixel gap). The gap is what shows where in the content we are.
+    if (len > (long long)track - kMinThumb) len = (long long)track - kMinThumb;
+    if (len < kMinThumb) len = kMinThumb;
+    return (int)std::min((long long)track, len);
 }
 
 int ScrollBarView::ThumbOffset() const

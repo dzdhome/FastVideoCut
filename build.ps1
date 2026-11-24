@@ -10,7 +10,7 @@
 # The version the user sees lives in src\app.rc (FILEVERSION + the FileVersion /
 # ProductVersion strings) and in the About text in src\MainWindow.cpp. $version
 # below is the third copy, used for the archive name - -Pack refuses to run when
-# the three disagree, so a release cannot ship named "1.5.1" while its exe says
+# the three disagree, so a release cannot ship named "1.6.0" while its exe says
 # something else.
 #
 # Override the toolchain location with  -Mingw <dir>\mingw64\bin
@@ -32,7 +32,7 @@ $wres = Join-Path $Mingw 'windres.exe'
 
 # Version of this build; see the header. Bump it together with src\app.rc and the
 # About text, then -Pack will happily name the archive after it.
-$version = '1.5.1'
+$version = '1.6.0'
 
 if (!(Test-Path $gxx))  { throw "g++ not found: $gxx" }
 if (!(Test-Path $wres)) { throw "windres not found: $wres" }
@@ -77,7 +77,7 @@ function Invoke-Tool {
 }
 $static   = @('-static', '-static-libgcc', '-static-libstdc++')
 $libs     = @('-lcomctl32', '-lcomdlg32', '-lshell32', '-lole32', '-loleaut32',
-              '-lmsimg32', '-lgdi32', '-luser32', '-lwinmm')
+              '-lmsimg32', '-lgdi32', '-luser32', '-lwinmm', '-luxtheme')
 
 $sources = Get-ChildItem (Join-Path $root 'src\*.cpp') | Sort-Object Name
 
@@ -106,14 +106,14 @@ Invoke-Tool $gxx ($cxxflags + $static + $ldflags + @('-municode', '-o', $gui) + 
 $st = Join-Path $outDir 'SelfTest.exe'
 Write-Host ("  build    {0}" -f $st)
 $stSrc = @((Join-Path $root 'tests\SelfTest.cpp'))
-foreach ($n in 'Utf', 'Process', 'Ffmpeg', 'Project', 'Loc', 'ScrollBarView') {
+foreach ($n in 'Utf', 'Process', 'Ffmpeg', 'Project', 'Loc', 'Theme', 'ScrollBarView') {
     $stSrc += (Join-Path $root ("src\$n.cpp"))
 }
 # SelfTest stays at -O2 with exceptions: no GUI, so strip/LTO buys nothing
 # and readable assertion output is worth more than a few KB.
 # -lgdi32 for WrapTextToWidth's text measuring; it must follow the sources,
-# otherwise the static linker drops it.
-Invoke-Tool $gxx (@('-std=c++17', '-Wall', '-Wextra', '-municode', '-O2') + $static + @('-o', $st) + $stSrc + @('-lgdi32')) 'SelfTest build' | Out-Null
+# otherwise the static linker drops it. Theme uses uxtheme's SetWindowTheme.
+Invoke-Tool $gxx (@('-std=c++17', '-Wall', '-Wextra', '-municode', '-O2') + $static + @('-o', $st) + $stSrc + @('-lgdi32', '-luxtheme')) 'SelfTest build' | Out-Null
 
 $sz = [math]::Round((Get-Item $gui).Length / 1KB)
 Write-Host ("OK  FastVideoCut.exe {0} KB   SelfTest.exe {1} KB" -f $sz, [math]::Round((Get-Item $st).Length / 1KB))
@@ -144,17 +144,21 @@ if ($Pack) {
     $lic = Join-Path $outDir 'LICENSE.txt'
     if (!(Test-Path $lic)) { Copy-Item (Join-Path $root 'LICENSE') $lic }
 
+    # The release archive ships the GUI only: SelfTest.exe is a build-time
+    # artefact that has no business in end users' hands. LICENSE.txt stays
+    # because distributing the binary requires the licence text.
     $zip = Join-Path $outDir ("FastVideoCut-$version-win64.zip")
     Remove-Item $zip -Force -ErrorAction SilentlyContinue
-    Compress-Archive -Path @($gui, $st, $lic) -DestinationPath $zip -Force
+    Compress-Archive -Path @($gui, $lic) -DestinationPath $zip -Force
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $za = [IO.Compression.ZipFile]::OpenRead($zip)
     $entries = @($za.Entries | ForEach-Object { $_.FullName })
     $za.Dispose()
-    foreach ($want in 'FastVideoCut.exe', 'SelfTest.exe', 'LICENSE.txt') {
+    foreach ($want in 'FastVideoCut.exe', 'LICENSE.txt') {
         if ($entries -notcontains $want) { throw "$zip is missing $want" }
     }
+    if ($entries -contains 'SelfTest.exe') { throw "$zip must not bundle SelfTest.exe" }
     Write-Host ("OK  {0}  {1} KB  [{2}]" -f (Split-Path $zip -Leaf),
                 [math]::Round((Get-Item $zip).Length / 1KB), ($entries -join ', '))
 }

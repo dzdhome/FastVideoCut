@@ -22,6 +22,7 @@
 // ---------------------------------------------------------------------------
 #include "Preview.h"
 
+#include "Theme.h"
 #include "Utf.h"
 #include "Loc.h"
 
@@ -153,6 +154,14 @@ void PreviewPane::SetLanguage()
     if (pane_) ::InvalidateRect(pane_, nullptr, FALSE);
 }
 
+void PreviewPane::SetTheme()
+{
+    if (!pane_) return;
+    Theme::ApplyWindow(pane_, Theme::Dark());
+    compositeDirty_ = true;      // the empty-monitor fill lives in the composite
+    ::InvalidateRect(pane_, nullptr, FALSE);
+}
+
 bool PreviewPane::Create(HWND owner, int id, HINSTANCE inst)
 {
     owner_ = owner;
@@ -182,24 +191,24 @@ bool PreviewPane::Create(HWND owner, int id, HINSTANCE inst)
     if (!pane_) return false;
 
     btnPause_ = ::CreateWindowExW(0, L"BUTTON", TR(L"暂停", L"Pause"),
-                                  WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_PUSHBUTTON,
+                                  WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_OWNERDRAW,
                                   0, 0, 10, 10, pane_, (HMENU)(INT_PTR)IDC_PV_PAUSE,
                                   inst_, nullptr);
     btnStop_ = ::CreateWindowExW(0, L"BUTTON", TR(L"停止", L"Stop"),
-                                 WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_PUSHBUTTON,
+                                 WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_OWNERDRAW,
                                  0, 0, 10, 10, pane_, (HMENU)(INT_PTR)IDC_PV_STOP,
                                  inst_, nullptr);
     btnBack_ = ::CreateWindowExW(0, L"BUTTON", TR(L"◀ 5s", L"◀ 5s"),
-                                 WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_PUSHBUTTON,
+                                 WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_OWNERDRAW,
                                  0, 0, 10, 10, pane_, (HMENU)(INT_PTR)IDC_PV_BACK,
                                  inst_, nullptr);
     btnFwd_ = ::CreateWindowExW(0, L"BUTTON", TR(L"5s ▶", L"5s ▶"),
-                                WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_PUSHBUTTON,
+                                WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_OWNERDRAW,
                                 0, 0, 10, 10, pane_, (HMENU)(INT_PTR)IDC_PV_FWD,
                                 inst_, nullptr);
     // 只在暂停时露面：没有黑屏帧的转场就靠它人工切一刀（再点一次是删除）
     btnSplit_ = ::CreateWindowExW(0, L"BUTTON", TR(L"插入分割", L"Split here"),
-                                  WS_CHILD | WS_DISABLED | BS_PUSHBUTTON,
+                                  WS_CHILD | WS_DISABLED | BS_OWNERDRAW,
                                   0, 0, 10, 10, pane_, (HMENU)(INT_PTR)IDC_PV_SPLIT,
                                   inst_, nullptr);
 
@@ -380,6 +389,17 @@ LRESULT PreviewPane::WndProc(UINT msg, WPARAM wp, LPARAM lp)
         OnPaint();
         return 0;
 
+    case WM_DRAWITEM:
+    {
+        const DRAWITEMSTRUCT* dis = (const DRAWITEMSTRUCT*)lp;
+        if (dis && dis->CtlID >= IDC_PV_PAUSE && dis->CtlID <= IDC_PV_SPLIT)
+        {
+            Theme::DrawButton(dis);
+            return TRUE;
+        }
+        break;
+    }
+
     case WM_ERASEBKGND:
         return 1;
 
@@ -548,10 +568,10 @@ void PreviewPane::EnsureComposite(int w, int h)
     memW_ = w;
     memH_ = h;
 
-    HBRUSH black = ::CreateSolidBrush(RGB(0, 0, 0));
+    HBRUSH empty = ::CreateSolidBrush(Theme::C().pvEmptyBg);
     RECT all = { 0, 0, w, h };
-    ::FillRect(memDC_, &all, black);
-    ::DeleteObject(black);
+    ::FillRect(memDC_, &all, empty);
+    ::DeleteObject(empty);
     compositeDirty_ = true;
 }
 
@@ -567,10 +587,10 @@ void PreviewPane::RedrawComposite()
     }
     if (fw <= 0 || fh <= 0 || paintBuf_.size() < (size_t)fw * fh * 3)
     {
-        HBRUSH black = ::CreateSolidBrush(RGB(0, 0, 0));
+        HBRUSH empty = ::CreateSolidBrush(Theme::C().pvEmptyBg);
         RECT all = { 0, 0, memW_, memH_ };
-        ::FillRect(memDC_, &all, black);
-        ::DeleteObject(black);
+        ::FillRect(memDC_, &all, empty);
+        ::DeleteObject(empty);
         compositeDirty_ = false;
         return;
     }
@@ -659,19 +679,20 @@ void PreviewPane::OnPaint()
         ::BitBlt(dc, vid.left, vid.top, memW_, memH_, memDC_, 0, 0, SRCCOPY);
     else
     {
-        HBRUSH black = ::CreateSolidBrush(RGB(0, 0, 0));
-        ::FillRect(dc, &vid, black);
-        ::DeleteObject(black);
+        HBRUSH empty = ::CreateSolidBrush(Theme::C().pvEmptyBg);
+        ::FillRect(dc, &vid, empty);
+        ::DeleteObject(empty);
     }
 
     // ---- bottom bar -------------------------------------------------------
+    const ThemeColors& tc = Theme::C();
     RECT bar = rc;
     bar.top = rc.bottom - barH_;
-    HBRUSH bg = ::CreateSolidBrush(RGB(24, 26, 31));
+    HBRUSH bg = ::CreateSolidBrush(tc.pvBarBg);
     ::FillRect(dc, &bar, bg);
     ::DeleteObject(bg);
 
-    HPEN sep = ::CreatePen(PS_SOLID, 1, RGB(58, 64, 76));
+    HPEN sep = ::CreatePen(PS_SOLID, 1, tc.pvBarSep);
     HGDIOBJ oldPen = ::SelectObject(dc, sep);
     ::MoveToEx(dc, bar.left, bar.top, nullptr);
     ::LineTo(dc, bar.right, bar.top);
@@ -689,7 +710,7 @@ void PreviewPane::OnPaint()
         if (f > 1.0) f = 1.0;
 
         const int w = seekRc_.right - seekRc_.left;
-        HBRUSH track = ::CreateSolidBrush(RGB(58, 64, 76));
+        HBRUSH track = ::CreateSolidBrush(tc.pvTrack);
         ::FillRect(dc, &seekRc_, track);
         ::DeleteObject(track);
 
@@ -697,7 +718,7 @@ void PreviewPane::OnPaint()
         {
             RECT filled = seekRc_;
             filled.right = seekRc_.left + (int)((double)w * f + 0.5);
-            HBRUSH fill = ::CreateSolidBrush(RGB(86, 150, 235));
+            HBRUSH fill = ::CreateSolidBrush(tc.pvFill);
             ::FillRect(dc, &filled, fill);
             ::DeleteObject(fill);
         }
@@ -706,7 +727,7 @@ void PreviewPane::OnPaint()
         const int tw = MulDiv(5, dpi_, 96);
         int tx = seekRc_.left + (int)((double)(w - tw) * f + 0.5);
         RECT thumb = { tx, seekRc_.top - 1, tx + tw, seekRc_.bottom + 1 };
-        HBRUSH tb = ::CreateSolidBrush(seekDrag_ ? RGB(255, 255, 255) : RGB(222, 228, 238));
+        HBRUSH tb = ::CreateSolidBrush(seekDrag_ ? tc.pvThumbDrag : tc.pvThumb);
         ::FillRect(dc, &thumb, tb);
         ::DeleteObject(tb);
     }
@@ -721,7 +742,7 @@ void PreviewPane::OnPaint()
                + L"   " + StateSuffix(state);
 
     ::SetBkMode(dc, TRANSPARENT);
-    ::SetTextColor(dc, RGB(198, 204, 214));
+    ::SetTextColor(dc, tc.pvBarText);
     HGDIOBJ oldFont = font_ ? ::SelectObject(dc, font_) : nullptr;
     RECT tr = bar;
     tr.left  += MulDiv(8, dpi_, 96);
@@ -738,7 +759,7 @@ void PreviewPane::OnPaint()
     // otherwise a seek (frame not arrived yet) would flash "click a segment"
     if (!have && state == 0)
     {
-        ::SetTextColor(dc, RGB(126, 134, 148));
+        ::SetTextColor(dc, tc.pvPlaceholder);
         HGDIOBJ of = font_ ? ::SelectObject(dc, font_) : nullptr;
         ::DrawTextW(dc, TR(L"单击时间线上的分段开始预览播放",
                                 L"Click a segment in the timeline to preview it"), -1, &vid,

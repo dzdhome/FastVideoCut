@@ -128,6 +128,8 @@ private:
     void LayoutChildren();
     // 界面语言切换后重建所有静态文字（菜单、按钮、列表头、状态栏…）
     void ApplyLanguage();
+    // 主题切换后重设系统控件颜色并让自绘控件重画（不重启）
+    void ApplyTheme();
     void OnCommand(int id);
     void OnAddFiles(std::vector<std::wstring>* files);
     void OnDropAdd(HDROP drop);

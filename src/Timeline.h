@@ -104,6 +104,7 @@ public:
     // the user has not zoomed or scrolled manually, keep the whole timeline fitted.
     void NotifyResized();
     void SetThumbHeight(int h);
+    void SetTheme();          // 主题切换后重绘（帧流颜色在画的时候才取）
     void FitToWidth();
     void ZoomBy(double factor, int anchorX);
     void ScrollPixels(int dx);

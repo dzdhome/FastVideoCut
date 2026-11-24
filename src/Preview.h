@@ -74,6 +74,7 @@ public:
     void Stop();         // user stop / job start: logs "preview stopped"
     void Shutdown();     // silent teardown (window is going away)
     void SetLanguage();  // 界面语言切换后重写按钮文字并重绘
+    void SetTheme();     // 主题切换后重绘底栏（按钮是自绘的）
 
     // ---- 定位 / 快进后退（方向键、滚轮、进度条拖动都走这里） --------------
     // SeekTo 会把两条 ffmpeg 管道停掉再从新位置起（管道跳不了），暂停时定位

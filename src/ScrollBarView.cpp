@@ -1,11 +1,15 @@
 // ---------------------------------------------------------------------------
 // ScrollBarView.cpp - self-painted scroll bar
 //
-// Flat light track, plain grey thumb, thin frame - the look the log view had.
+// Flat track, plain grey thumb, thin frame - the look the log view had.
 // No arrow buttons: the thumb darkens on hover and darker still while it is
 // being dragged, which is a lighter hint than a button that is not there.
+// The colours come from the active Theme, so the same control serves the dark
+// palette of the timeline and the light one side by side.
 // ---------------------------------------------------------------------------
 #include "ScrollBarView.h"
+
+#include "Theme.h"
 
 #include <windowsx.h>
 
@@ -13,11 +17,6 @@
 
 namespace
 {
-    const COLORREF kTrack      = RGB(240, 240, 240);
-    const COLORREF kThumb      = RGB(160, 160, 160);
-    const COLORREF kThumbHover = RGB(120, 120, 120);
-    const COLORREF kThumbDown  = RGB(90, 90, 90);
-
     const int kMinTrack    = 16;     // below this the bar is not worth showing
     const int kMinThumb    = 18;     // never so small it is impossible to grab
     const int kFrame       = 1;
@@ -264,6 +263,7 @@ LRESULT ScrollBarView::WndProc(UINT msg, WPARAM wp, LPARAM lp)
     switch (msg)
     {
     case WM_PAINT:       OnPaint(); return 0;
+    case WM_PRINTCLIENT: Paint((HDC)wp); return 0;
     case WM_ERASEBKGND:  return 1;
     case WM_SETCURSOR:
         ::SetCursor(::LoadCursorW(nullptr, IDC_ARROW));
@@ -321,10 +321,19 @@ void ScrollBarView::OnPaint()
 {
     PAINTSTRUCT ps;
     HDC dc = ::BeginPaint(bar_, &ps);
+    Paint(dc);
+    ::EndPaint(bar_, &ps);
+}
+
+void ScrollBarView::Paint(HDC dc)
+{
     RECT rc;
     ::GetClientRect(bar_, &rc);
+    const ThemeColors& c = Theme::C();
 
-    HBRUSH track = ::CreateSolidBrush(kTrack);
+    // The track is filled over the whole client rect: when the thumb is smaller
+    // than the bar (it always is) a theme switch leaves no stale pixels behind.
+    HBRUSH track = ::CreateSolidBrush(c.sbTrack);
     ::FillRect(dc, &rc, track);
     ::DeleteObject(track);
 
@@ -338,13 +347,14 @@ void ScrollBarView::OnPaint()
         else       t = { rc.left + kFrame + off + kThumbInset, rc.top + kThumbInset,
                          rc.left + kFrame + off + thumb - kThumbInset, rc.bottom - kThumbInset };
 
-        const COLORREF c = dragging_  ? kThumbDown
-                         : (hoverThumb_ ? kThumbHover : kThumb);
-        HBRUSH hb = ::CreateSolidBrush(c);
+        const COLORREF col = dragging_  ? c.sbThumbDown
+                           : (hoverThumb_ ? c.sbThumbHover : c.sbThumb);
+        HBRUSH hb = ::CreateSolidBrush(col);
         ::FillRect(dc, &t, hb);
         ::DeleteObject(hb);
     }
 
-    ::FrameRect(dc, &rc, (HBRUSH)::GetStockObject(GRAY_BRUSH));
-    ::EndPaint(bar_, &ps);
+    HBRUSH frame = ::CreateSolidBrush(c.sbBorder);
+    ::FrameRect(dc, &rc, frame);
+    ::DeleteObject(frame);
 }

@@ -71,6 +71,7 @@ private:
     LRESULT WndProc(UINT msg, WPARAM wParam, LPARAM lParam);
 
     void OnPaint();
+    void Paint(HDC dc);                // shared by WM_PAINT and WM_PRINTCLIENT
     void OnLButtonDown(int x, int y);
     void OnMouseMove(int x, int y, bool leftDown);
     void OnLButtonUp();

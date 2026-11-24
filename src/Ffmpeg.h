@@ -147,15 +147,39 @@ struct BlackParams
     int tailBackMinSec = 0;        // 片尾范围: 从片尾倒退最小
 };
 
+// Which video encoder a re-encoded export should use. Auto = the fastest
+// hardware encoder that passed the one-frame self test, otherwise libx264.
+// The numeric values are persisted in the INI file - append, never renumber.
+enum class VideoEncoder
+{
+    Auto  = 0,
+    X264  = 1,      // libx264 (software, CRF)
+    NVENC = 2,      // h264_nvenc (NVIDIA)
+    QSV   = 3,      // h264_qsv (Intel)
+    AMF   = 4       // h264_amf (AMD)
+};
+
+// ffmpeg encoder name: "libx264" / "h264_nvenc" / "h264_qsv" / "h264_amf".
+const char* EncoderCodecName(VideoEncoder e);
+// Pure decision, so the self test can pin it down: Auto walks NVENC -> QSV ->
+// AMF -> libx264; an explicitly requested hardware encoder that failed its
+// self test falls back to libx264.
+VideoEncoder ResolveEncoderChoice(VideoEncoder want, bool nvencOk, bool qsvOk, bool amfOk);
+// Appends "-c:v <encoder>" plus the quality arguments that encoder understands
+// (CRF, NVENC cq, QSV global_quality, AMF cqp) and a yuv420p pixel format.
+void AppendVideoEncoderArgs(std::vector<std::wstring>& args, VideoEncoder enc,
+                            int crf, const std::string& preset);
+
 // Options for stream-copy (lossless) or re-encoded output.
 struct EncodeOptions
 {
-    bool        reencode       = false;      // false => "-c copy" (lossless)
-    int         crf            = 18;
-    std::string preset         = "veryfast";
-    std::string audioCodec     = "aac";
-    int         audioBitrateK  = 192;
-    bool        faststart      = true;
+    bool         reencode      = false;      // false => "-c copy" (lossless)
+    VideoEncoder encoder       = VideoEncoder::Auto;
+    int          crf           = 18;
+    std::string  preset        = "veryfast";
+    std::string  audioCodec    = "aac";
+    int          audioBitrateK = 192;
+    bool         faststart     = true;
 };
 
 struct FfmpegPaths
@@ -216,6 +240,14 @@ public:
                    int width, int height, double fps, bool hasAudio,
                    const EncodeOptions& enc, std::string& err) const;
 
+    // ---- hardware encoders ------------------------------------------------
+    // Runs one throw-away frame through each hardware encoder ffmpeg knows
+    // about. Listed in "-encoders" only means it was compiled in; the test
+    // frame proves a device / driver actually accepts it. Cached until
+    // ResetEncoderProbe() (ffmpeg was relocated).
+    VideoEncoder ResolveEncoder(VideoEncoder want) const;
+    void ResetEncoderProbe() const { encProbed_ = false; nvencOk_ = qsvOk_ = amfOk_ = false; }
+
     // Remuxes `in` into an MP4 with a fixed timescale, without touching the codec
     // (`-c copy`). This is what makes a MKV + MP4 merge work: concat aligns streams
     // by index and interprets timestamps in each file's own time_base, so a 1/1000
@@ -234,9 +266,23 @@ private:
                     const std::function<void(double)>& onProgress,
                     const CancelToken& cancel, std::string& err) const;
 
+    // Shared tail of Trim / Concat / Normalize: builds the arguments for the
+    // chosen encoder and runs ffmpeg. When a hardware encoder fails at run
+    // time the whole command is rebuilt once on libx264 instead of failing the
+    // export - a crashed NVENC session must not cost the user the job.
+    bool EncodeWithFallback(const std::function<std::vector<std::wstring>(VideoEncoder)>& build,
+                            const EncodeOptions& enc, const std::wstring& out,
+                            const wchar_t* what, std::string& err) const;
+    void ProbeEncoders() const;
+
     FfmpegPaths paths_;
     FfmpegLogFn log_;
     void Log(const std::wstring& s) const { if (log_) log_(s); }
+
+    mutable bool encProbed_ = false;
+    mutable bool nvencOk_   = false;
+    mutable bool qsvOk_     = false;
+    mutable bool amfOk_     = false;
 };
 
 // ----------------------- helpers (unit testable) ---------------------------

@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 #include "LogView.h"
 
+#include "Theme.h"
 #include "Utf.h"
 
 #include <windowsx.h>
@@ -19,9 +20,6 @@ namespace
     const int      kWheelLinesPerNotch = 3;
     const int      kScrollBarW         = 14;
     const int      kMinScrollRange     = 8;
-    const COLORREF kSelBg              = RGB(0xCC, 0xE4, 0xF7);
-    const COLORREF kText               = RGB(16, 16, 16);
-    const COLORREF kSelText            = RGB(0x00, 0x00, 0x00);
 }
 
 bool LogView::Create(HWND owner, int id, HINSTANCE inst)
@@ -78,6 +76,12 @@ void LogView::SetFont(HFONT font)
     font_ = font;
     ComputeMetrics();
     if (view_) Rebuild();
+}
+
+void LogView::SetTheme()
+{
+    if (!view_) return;
+    ::InvalidateRect(view_, nullptr, FALSE);
 }
 
 // Not called SelectFont: windowsx.h defines that as a macro.
@@ -255,30 +259,39 @@ void LogView::OnPaint()
 {
     PAINTSTRUCT ps;
     HDC dc = ::BeginPaint(view_, &ps);
+    Paint(dc);
+    ::EndPaint(view_, &ps);
+}
+
+void LogView::Paint(HDC dc)
+{
     RECT rc;
     ::GetClientRect(view_, &rc);
+    const ThemeColors& c = Theme::C();
 
     // Always repaint the whole client area before drawing any glyph. Every
     // invalidate in this control (append, scroll, re-wrap) covers the full
     // window, but erasing unconditionally here means a stale line can never
     // survive underneath a scrolled-to one - that is what "characters piled on
-    // top of each other" looks like.
-    ::FillRect(dc, &rc, (HBRUSH)::GetStockObject(WHITE_BRUSH));
+    // top of each other" looks like. The fill is also what makes a theme
+    // switch show up without touching the stored lines.
+    HBRUSH bgBrush = ::CreateSolidBrush(c.logBg);
+    ::FillRect(dc, &rc, bgBrush);
+    ::DeleteObject(bgBrush);
 
     if (lineH_ <= 0) ComputeMetrics();
 
     HFONT old = PickFont(dc);
     // TRANSPARENT is deliberate and safe *because* of the full-area FillRect
-    // above: the glyph backgrounds are already white. SetBkColor is kept in
-    // sync with that fill anyway, so switching the mode to OPAQUE later could
-    // not introduce a colour mismatch.
+    // above: the glyph backgrounds are already in logBg. SetBkColor is kept in
+    // sync with that fill anyway.
     ::SetBkMode(dc, TRANSPARENT);
-    ::SetBkColor(dc, RGB(255, 255, 255));
+    ::SetBkColor(dc, c.logBg);
 
     const size_t a = std::min(selFrom_, selTo_);
     const size_t b = std::max(selFrom_, selTo_);
 
-    HBRUSH selBrush = (selFrom_ != selTo_) ? ::CreateSolidBrush(kSelBg) : nullptr;
+    HBRUSH selBrush = (selFrom_ != selTo_) ? ::CreateSolidBrush(c.logSelBg) : nullptr;
 
     const int lines = VisibleLines();
     for (int i = 0; i < lines; ++i)
@@ -293,7 +306,7 @@ void LogView::OnPaint()
             RECT band = { 0, y, rc.right - kScrollBarW, y + lineH_ };
             ::FillRect(dc, &band, selBrush);
         }
-        ::SetTextColor(dc, selected ? kSelText : kText);
+        ::SetTextColor(dc, selected ? c.logSelText : c.logText);
         ::TextOutW(dc, 4, y, shown_[idx].c_str(), (int)shown_[idx].size());
     }
 
@@ -302,7 +315,6 @@ void LogView::OnPaint()
 
     // The scroll bar is a child window (ScrollBarView), painted by itself -
     // nothing to draw here.
-    ::EndPaint(view_, &ps);
 }
 
 void LogView::OnMouseWheel(int wheelDelta)
@@ -403,6 +415,10 @@ LRESULT LogView::WndProc(UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_PAINT:
         OnPaint();
+        return 0;
+
+    case WM_PRINTCLIENT:
+        Paint((HDC)wp);
         return 0;
 
     case WM_MOUSEWHEEL:

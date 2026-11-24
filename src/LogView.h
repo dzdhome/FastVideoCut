@@ -24,6 +24,7 @@ public:
     HWND hwnd() const { return view_; }
 
     void SetFont(HFONT font);
+    void SetTheme();     // palette switched: repaint with the new colours
 
     // Adds one logical line. It is wrapped here, at the current width, and
     // appended to the view. Scrolls to the new line unless the user has
@@ -47,6 +48,7 @@ private:
     LRESULT WndProc(UINT msg, WPARAM wp, LPARAM lp);
 
     void OnPaint();
+    void Paint(HDC dc);  // shared by WM_PAINT and WM_PRINTCLIENT
     void OnMouseWheel(int wheelDelta);
     void OnLButtonDown(int x, int y);
     void OnMouseMove(int x, int y, bool leftDown);

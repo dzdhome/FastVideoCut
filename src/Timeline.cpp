@@ -23,6 +23,7 @@
 #include "Timeline.h"
 #include "Messages.h"
 #include "Loc.h"
+#include "Theme.h"
 
 #include <windowsx.h>
 #include <shellapi.h>
@@ -37,27 +38,32 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// palette
+// palette - read from the active Theme at paint time, so a theme switch only
+// needs an InvalidateRect. The names are kept from the days when these were
+// file-scope constants: no call site had to change.
 // ---------------------------------------------------------------------------
-static const COLORREF kClrBack      = RGB(24, 26, 31);
-static const COLORREF kClrRuler     = RGB(34, 37, 44);
-static const COLORREF kClrRulerLine = RGB(70, 75, 86);
-static const COLORREF kClrRulerText = RGB(170, 176, 188);
-static const COLORREF kClrRowA      = RGB(30, 33, 39);
-static const COLORREF kClrRowB      = RGB(27, 30, 36);
-static const COLORREF kClrRowBrd    = RGB(48, 52, 61);
-static const COLORREF kClrPanel     = RGB(36, 39, 46);
-static const COLORREF kClrText      = RGB(214, 218, 226);
-static const COLORREF kClrTextDim   = RGB(138, 144, 156);
-static const COLORREF kClrSelFill   = RGB(0, 110, 190);
-static const COLORREF kClrSelBrd    = RGB(0, 190, 255);
-static const COLORREF kClrBlackFill = RGB(150, 30, 30);
-static const COLORREF kClrBlackBrd  = RGB(235, 80, 80);
-static const COLORREF kClrDropBrd   = RGB(96, 100, 110);
-static const COLORREF kClrCurrent   = RGB(255, 200, 60);
-static const COLORREF kClrPlaceholder = RGB(44, 48, 56);
-static const COLORREF kClrHdr        = RGB(255, 168, 60);   // HDR 标识高亮色
-static const COLORREF kClrManual     = RGB(255, 140, 40);   // 手动插入的分割标记
+#define kClrBack        (Theme::C().tlBack)
+#define kClrRuler       (Theme::C().tlRuler)
+#define kClrRulerLine   (Theme::C().tlRulerLine)
+#define kClrRulerText   (Theme::C().tlRulerText)
+#define kClrRowA        (Theme::C().tlRowA)
+#define kClrRowB        (Theme::C().tlRowB)
+#define kClrRowBrd      (Theme::C().tlRowBrd)
+#define kClrPanel       (Theme::C().tlPanel)
+#define kClrText        (Theme::C().tlText)
+#define kClrTextDim     (Theme::C().tlTextDim)
+#define kClrSelFill     (Theme::C().tlSelFill)
+#define kClrSelBrd      (Theme::C().tlSelBrd)
+#define kClrBlackFill   (Theme::C().tlBlackFill)
+#define kClrBlackBrd    (Theme::C().tlBlackBrd)
+#define kClrDropBrd     (Theme::C().tlDropBrd)
+#define kClrCurrent     (Theme::C().tlCurrent)
+#define kClrPlaceholder (Theme::C().tlPlaceholder)
+#define kClrShade       (Theme::C().tlShade)
+#define kClrPlayhead    (Theme::C().tlPlayhead)
+#define kClrHdr         (Theme::C().tlHdr)     // HDR 标识高亮色
+#define kClrManual      (Theme::C().tlManual)  // 手动插入的分割标记
+#define kClrThumbBack   (Theme::C().tlThumbBack)
 
 static void AlphaFillRect(HDC dc, const RECT& rc, COLORREF c, BYTE alpha)
 {
@@ -316,6 +322,13 @@ void TimelineView::SetThumbHeight(int h)
     thumbH_ = h;
     epoch_++;
     Refresh();
+}
+
+void TimelineView::SetTheme()
+{
+    if (!hwnd_) return;
+    Theme::ApplyWindow(hwnd_, Theme::Dark());
+    ::InvalidateRect(hwnd_, nullptr, TRUE);
 }
 
 void TimelineView::FitToWidth()
@@ -896,7 +909,7 @@ void TimelineView::DrawEmptyState(HDC dc, const RECT& rc)
     ::DrawTextW(dc, line1, -1, &r, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     ::SelectObject(dc, fontSmall_);
-    ::SetTextColor(dc, RGB(110, 116, 128));
+    ::SetTextColor(dc, kClrTextDim);
     r.top += 30;
     ::DrawTextW(dc, line2, -1, &r, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
     r.top += 22;
@@ -1062,7 +1075,7 @@ void TimelineView::DrawRow(HDC dc, int index, const RECT& rc)
     strip.left = kLeftPanelW;
     if (strip.right > strip.left + 2)
     {
-        FillSolid(dc, strip, RGB(16, 18, 22));
+        FillSolid(dc, strip, Theme::C().tlThumbBack);
         double dur = it.info.duration;
         if (dur <= 0.0)
         {
@@ -1230,7 +1243,7 @@ void TimelineView::DrawSegments(HDC dc, int index, const RECT& rc, int x0, int x
         }
         else
         {
-            AlphaFillRect(dc, r, RGB(8, 8, 10), 120);
+            AlphaFillRect(dc, r, kClrShade, 120);
             FrameRectColor(dc, r, kClrDropBrd, 1);
         }
 
@@ -1274,7 +1287,7 @@ void TimelineView::DrawSegments(HDC dc, int index, const RECT& rc, int x0, int x
             bl.right = sx0 + 1;
             bl.top = top;
             bl.bottom = bottom;
-            FillSolid(dc, bl, RGB(210, 214, 222));
+            FillSolid(dc, bl, kClrPlayhead);
         }
     }
 

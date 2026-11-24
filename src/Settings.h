@@ -24,6 +24,7 @@
 
 #include "Utf.h"
 #include "Loc.h"
+#include "Theme.h"
 
 #include <string>
 
@@ -57,6 +58,9 @@ struct AppSettings
     // 界面语言。Auto = 跟随系统（首次启动按区域设置自动选中文或英文）
     AppLang lang                 = AppLang::Auto;
 
+    // 界面主题。默认深色：这是程序一直以来的样子，切换成浅色是用户主动选择。
+    AppTheme theme               = AppTheme::Dark;
+
     // 是否生成视频流缩略图。默认关闭：黑屏检测本身不需要缩略图，关掉可以
     // 少跑一遍 ffmpeg 抽帧 + 拼图，长视频列表明显更快。
     bool   makeThumbs            = false;
@@ -73,6 +77,9 @@ struct AppSettings
     bool   mergeReencode         = false;    // re-encode when sources mismatch
     int    crf                   = 18;
     std::string preset           = "veryfast";
+    // 视频编码器，取值与 Ffmpeg.h 的 VideoEncoder 一致（0 自动 / 1 x264 /
+    // 2 NVENC / 3 QSV / 4 AMF）。存成 int 是为了不让设置层依赖 Ffmpeg.h。
+    int    encoder               = 0;
     bool   faststart             = true;
     bool   confirmBeforeExport   = true;
 

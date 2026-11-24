@@ -30,6 +30,7 @@
 #include "../src/Project.h"
 #include "../src/Loc.h"
 #include "../src/ScrollBarView.h"
+#include "../src/Theme.h"
 
 #include <cstdio>
 #include <cmath>
@@ -298,6 +299,73 @@ int wmain(int argc, wchar_t** argv)
           "FormatString %s + wide args",
           FormatString(L"got [%ls]", FormatString(L"%s", std::wstring(L"abc").c_str()).c_str()));
     Check(FormatString(L"%s", L"wide") == L"wide", "FormatString literal wide arg");
+
+    // ---- hardware encoder selection (pure decision, no ffmpeg needed) ------
+    Check(std::string(EncoderCodecName(VideoEncoder::NVENC)) == "h264_nvenc",
+          "EncoderCodecName NVENC");
+    Check(std::string(EncoderCodecName(VideoEncoder::X264)) == "libx264",
+          "EncoderCodecName x264");
+    Check(ResolveEncoderChoice(VideoEncoder::Auto, true, true, true) == VideoEncoder::NVENC,
+          "auto prefers NVENC");
+    Check(ResolveEncoderChoice(VideoEncoder::Auto, false, true, true) == VideoEncoder::QSV,
+          "auto falls to QSV");
+    Check(ResolveEncoderChoice(VideoEncoder::Auto, false, false, true) == VideoEncoder::AMF,
+          "auto falls to AMF");
+    Check(ResolveEncoderChoice(VideoEncoder::Auto, false, false, false) == VideoEncoder::X264,
+          "auto falls back to x264");
+    Check(ResolveEncoderChoice(VideoEncoder::NVENC, false, true, true) == VideoEncoder::X264,
+          "requested NVENC that failed its self test falls back to x264");
+    Check(ResolveEncoderChoice(VideoEncoder::AMF, false, false, true) == VideoEncoder::AMF,
+          "explicit AMF is kept when its self test passed");
+    Check(ResolveEncoderChoice(VideoEncoder::X264, true, true, true) == VideoEncoder::X264,
+          "explicit x264 never upgrades to hardware");
+
+    {
+        // arg vectors: the quality switch differs per encoder, and every one of
+        // them must carry the pixel format the rest of the pipeline assumes
+        struct ArgCase { VideoEncoder e; const wchar_t* mustHave; };
+        auto has = [](const std::vector<std::wstring>& v, const wchar_t* s)
+        {
+            for (size_t i = 0; i < v.size(); ++i) if (v[i] == s) return true;
+            return false;
+        };
+
+        std::vector<std::wstring> ax;
+        AppendVideoEncoderArgs(ax, VideoEncoder::X264, 20, "medium");
+        Check(has(ax, L"libx264") && has(ax, L"-crf") && has(ax, L"20") &&
+              has(ax, L"-preset") && has(ax, L"medium") && has(ax, L"yuv420p"),
+              "x264 args: crf + preset + yuv420p");
+
+        std::vector<std::wstring> an;
+        AppendVideoEncoderArgs(an, VideoEncoder::NVENC, 20, "medium");
+        Check(has(an, L"h264_nvenc") && has(an, L"-cq") && has(an, L"20") &&
+              has(an, L"-preset") && has(an, L"p6") && has(an, L"yuv420p"),
+              "NVENC args: cq + mapped preset p6");
+
+        std::vector<std::wstring> aq;
+        AppendVideoEncoderArgs(aq, VideoEncoder::QSV, 22, "fast");
+        Check(has(aq, L"h264_qsv") && has(aq, L"-global_quality") && has(aq, L"22"),
+              "QSV args: global_quality");
+
+        std::vector<std::wstring> am;
+        AppendVideoEncoderArgs(am, VideoEncoder::AMF, 24, "fast");
+        Check(has(am, L"h264_amf") && has(am, L"cqp") && has(am, L"-qp_i") &&
+              has(am, L"24"),
+              "AMF args: cqp + qp_i");
+    }
+
+    // ---- theme palette ------------------------------------------------------
+    {
+        Theme::SetMode(AppTheme::Dark);
+        Check(Theme::Dark() && Theme::C().tlBack == RGB(38, 38, 38),
+              "dark palette active");
+        Theme::SetMode(AppTheme::Light);
+        Check(!Theme::Dark() && Theme::C().windowBg == RGB(245, 246, 248),
+              "light palette active");
+        Check(Theme::C().tlRowA != RGB(41, 41, 41),
+              "light palette really differs from the dark one");
+        Theme::SetMode(AppTheme::Dark);      // leave the default for the rest
+    }
 
     // -----------------------------------------------------------------------
     // 2. ffmpeg discovery

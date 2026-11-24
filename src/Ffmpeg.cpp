@@ -237,6 +237,7 @@ bool Ffmpeg::SetBinDir(const std::wstring& dir)
     paths_.binDir = d;
     paths_.ffmpeg = ff;
     paths_.ffprobe = FileExists(fp) ? fp : std::wstring();
+    ResetEncoderProbe();       // different ffmpeg build => different hw encoders
     return true;
 }
 
@@ -1128,6 +1129,148 @@ bool Ffmpeg::MakeMosaic(const std::wstring& file, double t0, double t1,
 }
 
 // ---------------------------------------------------------------------------
+// encoder selection (hardware vs. libx264)
+// ---------------------------------------------------------------------------
+namespace
+{
+    // x264 预设名 → NVENC 的 p1..p7（p1 最快，p7 最慢画质最好）
+    std::wstring NvencPreset(const std::string& p)
+    {
+        if (p == "ultrafast") return L"p1";
+        if (p == "superfast") return L"p2";
+        if (p == "veryfast")  return L"p3";
+        if (p == "faster")    return L"p4";
+        if (p == "fast")      return L"p5";
+        if (p == "medium")    return L"p6";
+        return L"p7";                                  // slow / slower / veryslow
+    }
+
+    // QSV 只认 veryfast..veryslow，比它更快的两档并到 veryfast
+    std::wstring QsvPreset(const std::string& p)
+    {
+        if (p == "faster")   return L"faster";
+        if (p == "fast")     return L"fast";
+        if (p == "medium")   return L"medium";
+        if (p == "slow")     return L"slow";
+        if (p == "slower")   return L"slower";
+        if (p == "veryslow") return L"veryslow";
+        return L"veryfast";                            // ultrafast / superfast / veryfast
+    }
+}
+
+const char* EncoderCodecName(VideoEncoder e)
+{
+    switch (e)
+    {
+    case VideoEncoder::NVENC: return "h264_nvenc";
+    case VideoEncoder::QSV:   return "h264_qsv";
+    case VideoEncoder::AMF:   return "h264_amf";
+    case VideoEncoder::X264:  return "libx264";
+    case VideoEncoder::Auto:
+    default:                  return "libx264";
+    }
+}
+
+VideoEncoder ResolveEncoderChoice(VideoEncoder want, bool nvencOk, bool qsvOk, bool amfOk)
+{
+    switch (want)
+    {
+    case VideoEncoder::X264:  return VideoEncoder::X264;
+    case VideoEncoder::NVENC: return nvencOk ? VideoEncoder::NVENC : VideoEncoder::X264;
+    case VideoEncoder::QSV:   return qsvOk   ? VideoEncoder::QSV   : VideoEncoder::X264;
+    case VideoEncoder::AMF:   return amfOk   ? VideoEncoder::AMF   : VideoEncoder::X264;
+    case VideoEncoder::Auto:
+    default:
+        if (nvencOk) return VideoEncoder::NVENC;
+        if (qsvOk)   return VideoEncoder::QSV;
+        if (amfOk)   return VideoEncoder::AMF;
+        return VideoEncoder::X264;
+    }
+}
+
+void AppendVideoEncoderArgs(std::vector<std::wstring>& a, VideoEncoder enc,
+                            int crf, const std::string& preset)
+{
+    if (enc == VideoEncoder::Auto) enc = VideoEncoder::X264;   // callers resolve first
+    a.push_back(L"-c:v");
+    a.push_back(Utf8ToWide(EncoderCodecName(enc)));
+
+    switch (enc)
+    {
+    case VideoEncoder::NVENC:
+        // cq 与 x264 的 crf 是同一档 0-51 语义；-b:v 0 让码率随 cq 自由浮动
+        a.push_back(L"-rc");     a.push_back(L"vbr");
+        a.push_back(L"-cq");     a.push_back(FormatString(L"%d", crf));
+        a.push_back(L"-b:v");    a.push_back(L"0");
+        a.push_back(L"-preset"); a.push_back(NvencPreset(preset));
+        a.push_back(L"-tune");   a.push_back(L"hq");
+        break;
+
+    case VideoEncoder::QSV:
+        a.push_back(L"-global_quality"); a.push_back(FormatString(L"%d", crf));
+        a.push_back(L"-preset");         a.push_back(QsvPreset(preset));
+        break;
+
+    case VideoEncoder::AMF:
+        // AMF 没有 CRF / CQ 语义统一的模式，用恒定量化参数（同样是 0-51）
+        a.push_back(L"-rc");   a.push_back(L"cqp");
+        a.push_back(L"-qp_i"); a.push_back(FormatString(L"%d", crf));
+        a.push_back(L"-qp_p"); a.push_back(FormatString(L"%d", crf));
+        a.push_back(L"-qp_b"); a.push_back(FormatString(L"%d", crf));
+        a.push_back(L"-quality"); a.push_back(L"quality");
+        break;
+
+    case VideoEncoder::X264:
+    default:
+        a.push_back(L"-crf");    a.push_back(FormatString(L"%d", crf));
+        a.push_back(L"-preset"); a.push_back(Utf8ToWide(preset));
+        break;
+    }
+    a.push_back(L"-pix_fmt"); a.push_back(L"yuv420p");
+}
+
+void Ffmpeg::ProbeEncoders() const
+{
+    if (encProbed_) return;
+    encProbed_ = true;
+    if (paths_.ffmpeg.empty()) return;
+
+    ProcessResult listed;
+    if (!RunProcessCapture(paths_.ffmpeg, L"-hide_banner -encoders", std::wstring(),
+                           CancelToken(), listed))
+        return;
+
+    // 出现在 -encoders 里只说明编译时带了它，不代表这台机器装了对应的显卡 /
+    // 驱动。真跑一帧 256x144 纯色才算数，失败一次也就几十毫秒。
+    struct Cand { VideoEncoder enc; const char* name; bool* ok; };
+    Cand cands[] =
+    {
+        { VideoEncoder::NVENC, "h264_nvenc", &nvencOk_ },
+        { VideoEncoder::QSV,   "h264_qsv",   &qsvOk_   },
+        { VideoEncoder::AMF,   "h264_amf",   &amfOk_   },
+    };
+    for (size_t i = 0; i < _countof(cands); ++i)
+    {
+        const Cand& c = cands[i];
+        if (listed.output.find(c.name) == std::string::npos) continue;
+
+        std::wstring args =
+            L"-hide_banner -nostdin -loglevel error -f lavfi "
+            L"-i color=c=black:s=256x144:d=0.1 -frames:v 1 -c:v " +
+            Utf8ToWide(c.name) + L" -f null -";
+        ProcessResult r;
+        if (RunProcessCapture(paths_.ffmpeg, args, std::wstring(), CancelToken(), r))
+            *c.ok = (r.exitCode == 0);
+    }
+}
+
+VideoEncoder Ffmpeg::ResolveEncoder(VideoEncoder want) const
+{
+    ProbeEncoders();
+    return ResolveEncoderChoice(want, nvencOk_, qsvOk_, amfOk_);
+}
+
+// ---------------------------------------------------------------------------
 // trimming / concatenating
 // ---------------------------------------------------------------------------
 namespace
@@ -1139,7 +1282,7 @@ namespace
     }
 
     void AppendEncodeArgs(std::vector<std::wstring>& a, const EncodeOptions& enc,
-                          const std::wstring& outPath, bool withAudio)
+                          VideoEncoder ve, const std::wstring& outPath, bool withAudio)
     {
         if (!enc.reencode)
         {
@@ -1149,10 +1292,7 @@ namespace
             a.push_back(L"make_zero");
             return;
         }
-        a.push_back(L"-c:v");   a.push_back(L"libx264");
-        a.push_back(L"-crf");   a.push_back(FormatString(L"%d", enc.crf));
-        a.push_back(L"-preset"); a.push_back(Utf8ToWide(enc.preset));
-        a.push_back(L"-pix_fmt"); a.push_back(L"yuv420p");
+        AppendVideoEncoderArgs(a, ve, enc.crf, enc.preset);
         if (withAudio)
         {
             a.push_back(L"-c:a"); a.push_back(Utf8ToWide(enc.audioCodec));
@@ -1169,6 +1309,43 @@ namespace
         }
     }
 }
+
+bool Ffmpeg::EncodeWithFallback(const std::function<std::vector<std::wstring>(VideoEncoder)>& build,
+                                const EncodeOptions& enc, const std::wstring& out,
+                                const wchar_t* what, std::string& err) const
+{
+    const VideoEncoder first = enc.reencode ? ResolveEncoder(enc.encoder) : VideoEncoder::X264;
+
+    ProcessResult r;
+    std::vector<std::wstring> a = build(first);
+    Log(L"ffmpeg " + JoinArgs(a));
+    if (!RunProcessCapture(paths_.ffmpeg, JoinArgs(a), std::wstring(), CancelToken(), r))
+    {
+        err = "failed to start ffmpeg";
+        return false;
+    }
+    if (r.exitCode == 0 && FileExists(out)) return true;
+
+    if (enc.reencode && first != VideoEncoder::X264)
+    {
+        // 过了开机自检也可能中途失败（驱动重载、显存被占）。整条命令换回
+        // 软件编码再跑一次，只多花这一次；直接报错让用户白等更糟。
+        Log(FormatString(L"encoder %s failed, retrying with libx264",
+                         Utf8ToWide(EncoderCodecName(first)).c_str()));
+        a = build(VideoEncoder::X264);
+        Log(L"ffmpeg " + JoinArgs(a));
+        if (!RunProcessCapture(paths_.ffmpeg, JoinArgs(a), std::wstring(), CancelToken(), r))
+        {
+            err = "failed to start ffmpeg";
+            return false;
+        }
+        if (r.exitCode == 0 && FileExists(out)) return true;
+    }
+
+    err = WideToUtf8(what) + " failed (exit " + FormatSecondsUtf8((double)r.exitCode, 0) + "): " + r.output;
+    return false;
+}
+
 
 bool Ffmpeg::Trim(const std::wstring& in, double t0, double t1, const std::wstring& out,
                   const EncodeOptions& enc, std::string& err) const
@@ -1193,34 +1370,24 @@ bool Ffmpeg::Trim(const std::wstring& in, double t0, double t1, const std::wstri
     //                  on a decodable picture (what the reference script does)
     //   output side -> timestamps are only shifted, the video stream really starts
     //                  at the NEXT keyframe -> seconds of audio with no picture
-    std::vector<std::wstring> a;
-    a.push_back(L"-y");
-    a.push_back(L"-hide_banner");
-    a.push_back(L"-nostdin");
-    a.push_back(L"-loglevel");  a.push_back(L"error");
-    a.push_back(L"-ss");        a.push_back(NumberText(t0, 3));
-    a.push_back(L"-i");         a.push_back(in);
-    a.push_back(L"-t");         a.push_back(NumberText(dur, 3));
-    a.push_back(L"-map");       a.push_back(L"0:v:0");
-    a.push_back(L"-map");       a.push_back(L"0:a:0?");
-    a.push_back(L"-map_metadata"); a.push_back(L"0");
-    AppendEncodeArgs(a, enc, out, true);
-    a.push_back(out);
-
-    Log(L"ffmpeg " + JoinArgs(a));
-
-    ProcessResult r;
-    if (!RunProcessCapture(paths_.ffmpeg, JoinArgs(a), std::wstring(), CancelToken(), r))
+    auto build = [&](VideoEncoder ve)
     {
-        err = "failed to start ffmpeg";
-        return false;
-    }
-    if (r.exitCode != 0 || !FileExists(out))
-    {
-        err = "trim failed (exit " + FormatSecondsUtf8((double)r.exitCode, 0) + "): " + r.output;
-        return false;
-    }
-    return true;
+        std::vector<std::wstring> a;
+        a.push_back(L"-y");
+        a.push_back(L"-hide_banner");
+        a.push_back(L"-nostdin");
+        a.push_back(L"-loglevel");  a.push_back(L"error");
+        a.push_back(L"-ss");        a.push_back(NumberText(t0, 3));
+        a.push_back(L"-i");         a.push_back(in);
+        a.push_back(L"-t");         a.push_back(NumberText(dur, 3));
+        a.push_back(L"-map");       a.push_back(L"0:v:0");
+        a.push_back(L"-map");       a.push_back(L"0:a:0?");
+        a.push_back(L"-map_metadata"); a.push_back(L"0");
+        AppendEncodeArgs(a, enc, ve, out, true);
+        a.push_back(out);
+        return a;
+    };
+    return EncodeWithFallback(build, enc, out, L"trim", err);
 }
 
 bool Ffmpeg::Concat(const std::vector<std::wstring>& parts, const std::wstring& listFile,
@@ -1255,44 +1422,25 @@ bool Ffmpeg::Concat(const std::vector<std::wstring>& parts, const std::wstring& 
     if (!list.empty()) fwrite(list.data(), 1, list.size(), fp);
     fclose(fp);
 
-    std::vector<std::wstring> a;
-    a.push_back(L"-y");
-    a.push_back(L"-hide_banner");
-    a.push_back(L"-nostdin");
-    a.push_back(L"-loglevel");  a.push_back(L"error");
-    a.push_back(L"-f");         a.push_back(L"concat");
-    a.push_back(L"-safe");      a.push_back(L"0");
-    a.push_back(L"-i");         a.push_back(listFile);
-    // 只取每段的默认视频/音频流。源文件可能带内嵌封面（mp4/mkv 的 attached_pic
-    // 图像流），不显式映射时它会被一起搬进输出，个别容器下还会直接报错。
-    a.push_back(L"-map");       a.push_back(L"0:v:0");
-    a.push_back(L"-map");       a.push_back(L"0:a:0?");
-
-    if (!enc.reencode)
+    auto build = [&](VideoEncoder ve)
     {
-        a.push_back(L"-c");     a.push_back(L"copy");
-        a.push_back(L"-avoid_negative_ts"); a.push_back(L"make_zero");
-    }
-    else
-    {
-        AppendEncodeArgs(a, enc, out, true);
-    }
-    a.push_back(out);
-
-    Log(L"ffmpeg " + JoinArgs(a));
-
-    ProcessResult r;
-    if (!RunProcessCapture(paths_.ffmpeg, JoinArgs(a), std::wstring(), CancelToken(), r))
-    {
-        err = "failed to start ffmpeg";
-        return false;
-    }
-    if (r.exitCode != 0 || !FileExists(out))
-    {
-        err = "concat failed (exit " + FormatSecondsUtf8((double)r.exitCode, 0) + "): " + r.output;
-        return false;
-    }
-    return true;
+        std::vector<std::wstring> a;
+        a.push_back(L"-y");
+        a.push_back(L"-hide_banner");
+        a.push_back(L"-nostdin");
+        a.push_back(L"-loglevel");  a.push_back(L"error");
+        a.push_back(L"-f");         a.push_back(L"concat");
+        a.push_back(L"-safe");      a.push_back(L"0");
+        a.push_back(L"-i");         a.push_back(listFile);
+        // 只取每段的默认视频/音频流。源文件可能带内嵌封面（mp4/mkv 的 attached_pic
+        // 图像流），不显式映射时它会被一起搬进输出，个别容器下还会直接报错。
+        a.push_back(L"-map");       a.push_back(L"0:v:0");
+        a.push_back(L"-map");       a.push_back(L"0:a:0?");
+        AppendEncodeArgs(a, enc, ve, out, true);
+        a.push_back(out);
+        return a;
+    };
+    return EncodeWithFallback(build, enc, out, L"concat", err);
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,64 +1461,52 @@ bool Ffmpeg::Normalize(const std::wstring& in, const std::wstring& out,
     if (height < 2) height = 2;
     if (fps <= 0.0) fps = 25.0;
 
-    std::vector<std::wstring> a;
-    a.push_back(L"-y");
-    a.push_back(L"-hide_banner");
-    a.push_back(L"-nostdin");
-    a.push_back(L"-loglevel"); a.push_back(L"error");
-    a.push_back(L"-i");        a.push_back(in);
-    // 同上：只取默认视频/音频流，内嵌封面（attached_pic）不参与重编码，
-    // 否则 ffmpeg 会把封面当成第二路视频流而报错。
-    a.push_back(L"-map");      a.push_back(L"0:v:0");
-    if (hasAudio)
-    {
-        a.push_back(L"-map");  a.push_back(L"0:a:0");
-    }
-    else
-    {
-        a.push_back(L"-f");    a.push_back(L"lavfi");
-        a.push_back(L"-i");    a.push_back(L"anullsrc=r=48000:cl=stereo");
-    }
-
     std::wstring vf = FormatString(
         L"scale=%d:%d:force_original_aspect_ratio=decrease,"
         L"pad=%d:%d:(ow-iw)/2:(oh-ih)/2,fps=%.6f,setsar=1",
         width, height, width, height, fps);
 
-    a.push_back(L"-vf");       a.push_back(vf);
-    a.push_back(L"-c:v");      a.push_back(L"libx264");
-    a.push_back(L"-crf");      a.push_back(FormatString(L"%d", enc.crf));
-    a.push_back(L"-preset");   a.push_back(Utf8ToWide(enc.preset));
-    a.push_back(L"-pix_fmt");  a.push_back(L"yuv420p");
-    a.push_back(L"-c:a");      a.push_back(L"aac");
-    a.push_back(L"-b:a");      a.push_back(L"192k");
-    a.push_back(L"-ar");       a.push_back(L"48000");
-    a.push_back(L"-ac");       a.push_back(L"2");
-    if (!hasAudio)
+    auto build = [&](VideoEncoder ve)
     {
-        a.push_back(L"-shortest");
-    }
-    if (enc.faststart && IsMp4LikeOutput(out))
-    {
-        a.push_back(L"-movflags");
-        a.push_back(L"+faststart");
-    }
-    a.push_back(out);
+        std::vector<std::wstring> a;
+        a.push_back(L"-y");
+        a.push_back(L"-hide_banner");
+        a.push_back(L"-nostdin");
+        a.push_back(L"-loglevel"); a.push_back(L"error");
+        a.push_back(L"-i");        a.push_back(in);
+        // 同上：只取默认视频/音频流，内嵌封面（attached_pic）不参与重编码，
+        // 否则 ffmpeg 会把封面当成第二路视频流而报错。
+        a.push_back(L"-map");      a.push_back(L"0:v:0");
+        if (hasAudio)
+        {
+            a.push_back(L"-map");  a.push_back(L"0:a:0");
+        }
+        else
+        {
+            a.push_back(L"-f");    a.push_back(L"lavfi");
+            a.push_back(L"-i");    a.push_back(L"anullsrc=r=48000:cl=stereo");
+        }
 
-    Log(L"ffmpeg " + JoinArgs(a));
-
-    ProcessResult r;
-    if (!RunProcessCapture(paths_.ffmpeg, JoinArgs(a), std::wstring(), CancelToken(), r))
-    {
-        err = "failed to start ffmpeg";
-        return false;
-    }
-    if (r.exitCode != 0 || !FileExists(out))
-    {
-        err = "normalize failed (exit " + FormatSecondsUtf8((double)r.exitCode, 0) + "): " + r.output;
-        return false;
-    }
-    return true;
+        a.push_back(L"-vf");       a.push_back(vf);
+        AppendVideoEncoderArgs(a, ve == VideoEncoder::Auto ? VideoEncoder::X264 : ve,
+                               enc.crf, enc.preset);
+        a.push_back(L"-c:a");      a.push_back(L"aac");
+        a.push_back(L"-b:a");      a.push_back(L"192k");
+        a.push_back(L"-ar");       a.push_back(L"48000");
+        a.push_back(L"-ac");       a.push_back(L"2");
+        if (!hasAudio)
+        {
+            a.push_back(L"-shortest");
+        }
+        if (enc.faststart && IsMp4LikeOutput(out))
+        {
+            a.push_back(L"-movflags");
+            a.push_back(L"+faststart");
+        }
+        a.push_back(out);
+        return a;
+    };
+    return EncodeWithFallback(build, enc, out, L"normalize", err);
 }
 
 // ---------------------------------------------------------------------------

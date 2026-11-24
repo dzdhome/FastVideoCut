@@ -24,6 +24,7 @@
 #include "SettingsDialog.h"
 #include "Loc.h"
 #include "Sound.h"
+#include "Theme.h"
 
 #include <windowsx.h>
 #include <shellapi.h>
@@ -50,6 +51,77 @@ constexpr wchar_t kFfmpegDownloadUrl[] = L"https://www.gyan.dev/ffmpeg/builds/";
 
 namespace
 {
+    // 列表框表头在部分 Windows 版本上不跟随 uxtheme 的深色提示（滚动条会，
+    // 表头不会），只能自己画。颜色每次绘制时现取，主题切换后重画即可。
+    struct CachedBrush
+    {
+        HBRUSH   h = nullptr;
+        COLORREF c = CLR_INVALID;
+        HBRUSH Get(COLORREF rgb)
+        {
+            if (!h || c != rgb)
+            {
+                if (h) ::DeleteObject(h);
+                h = ::CreateSolidBrush(rgb);
+                c = rgb;
+            }
+            return h;
+        }
+    };
+
+    LRESULT CALLBACK ListHeaderDrawSubclass(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+                                            UINT_PTR, DWORD_PTR)
+    {
+        if (msg == WM_NOTIFY)
+        {
+            static CachedBrush hdrFill, hdrLine;
+            NMHDR* nh = (NMHDR*)lp;
+            HWND hdr = (HWND)::SendMessageW(hwnd, LVM_GETHEADER, 0, 0);
+            if (nh && hdr && nh->hwndFrom == hdr && nh->code == NM_CUSTOMDRAW)
+            {
+                NMCUSTOMDRAW* cd = (NMCUSTOMDRAW*)lp;
+                if (cd->dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+                if (cd->dwDrawStage == CDDS_ITEMPREPAINT)
+                {
+                    RECT rc = cd->rc;
+                    ::FillRect(cd->hdc, &rc, hdrFill.Get(Theme::C().listHdrBg));
+
+                    wchar_t text[128] = {};
+                    HDITEMW hi;
+                    ::ZeroMemory(&hi, sizeof(hi));
+                    hi.mask = HDI_FORMAT | HDI_TEXT;
+                    hi.pszText = text;
+                    hi.cchTextMax = (int)(sizeof(text) / sizeof(text[0]));
+                    UINT fmt = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_LEFT;
+                    if (Header_GetItem(hdr, (int)cd->dwItemSpec, &hi))
+                    {
+                        if (hi.fmt & HDF_CENTER)     fmt = (fmt & ~(UINT)DT_LEFT) | DT_CENTER;
+                        else if (hi.fmt & HDF_RIGHT) fmt = (fmt & ~(UINT)DT_LEFT) | DT_RIGHT;
+                    }
+                    RECT tr = rc;
+                    tr.left  += 6;
+                    tr.right -= 6;
+                    ::SetBkMode(cd->hdc, TRANSPARENT);
+                    ::SetTextColor(cd->hdc, Theme::C().listHdrText);
+                    ::DrawTextW(cd->hdc, text, -1, &tr, fmt);
+
+                    HBRUSH line = hdrLine.Get(Theme::C().listLine);
+                    RECT sep = rc;
+                    sep.top = sep.bottom - 1;
+                    ::FillRect(cd->hdc, &sep, line);
+                    if ((int)cd->dwItemSpec + 1 < Header_GetItemCount(hdr))
+                    {
+                        sep = rc;
+                        sep.left = sep.right - 1;
+                        ::FillRect(cd->hdc, &sep, line);
+                    }
+                    return CDRF_SKIPDEFAULT;
+                }
+            }
+        }
+        return ::DefSubclassProc(hwnd, msg, wp, lp);
+    }
+
     // 顺序必须和 ToolBtn 枚举一致（LayoutChildren 里的 widths 数组也按它排）。
     // 这里既不能做成全局数组（TR() 不是常量表达式，不能用于静态初始化），
     // 也不能缓存成 static —— 界面语言会在运行中改，缓存会把旧语言留住。
@@ -232,6 +304,8 @@ bool MainWindow::Create(HINSTANCE hInst, const AppArgs& args)
     // 语言必须在建任何窗口之前定下来：控件文字、菜单、工具提示都在创建时取一次
     // TR()。Auto = 首次启动按系统区域自动选中文或英文。
     Loc::Apply(settings_.lang);
+    // 主题同理：调色板决定建窗口时的背景刷、按钮风格和 DWM 标题栏。
+    Theme::SetMode(settings_.theme);
 
     if (!args_.ffmpegDir.empty()) settings_.ffmpegDir = args_.ffmpegDir;
     if (args_.thumbHeight > 0)    settings_.thumbHeight = args_.thumbHeight;
@@ -310,6 +384,8 @@ bool MainWindow::Create(HINSTANCE hInst, const AppArgs& args)
                               nullptr, nullptr, hInst, this);
     if (!hwnd_) return false;
 
+    Theme::ApplyWindow(hwnd_, Theme::Dark());
+
     if (args_.noGui)
         ::ShowWindow(hwnd_, SW_HIDE);
     else
@@ -369,7 +445,7 @@ void MainWindow::CreateChildren()
     ::lstrcpynW(lf.lfFaceName, L"Microsoft YaHei UI", LF_FACESIZE);
     lf.lfHeight = -MulDiv(13, dpi_, 96);
     fontUi_ = ::CreateFontIndirectW(&lf);
-    bgBrush_ = ::CreateSolidBrush(RGB(24, 26, 31));
+    bgBrush_ = ::CreateSolidBrush(Theme::C().windowBg);
 
     // ---- toolbar buttons --------------------------------------------------
     const BtnDef* btns = ToolbarButtons(btnDefs_);
@@ -377,7 +453,7 @@ void MainWindow::CreateChildren()
     for (int i = 0; i < buttonCount_; ++i)
     {
         buttons_[i] = ::CreateWindowExW(0, L"BUTTON", btns[i].text,
-                                        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                         0, 0, 10, 10, hwnd_,
                                         (HMENU)(INT_PTR)btns[i].id, hInst_, nullptr);
         ::SendMessageW(buttons_[i], WM_SETFONT, (WPARAM)fontUi_, TRUE);
@@ -389,6 +465,7 @@ void MainWindow::CreateChildren()
                               LVS_SINGLESEL,
                               0, 0, 10, 10, hwnd_, (HMENU)IDC_LIST, hInst_, nullptr);
     ::SendMessageW(list_, WM_SETFONT, (WPARAM)fontUi_, TRUE);
+    ::SetWindowSubclass(list_, ListHeaderDrawSubclass, 1, 0);
     ::SendMessageW(list_, LVM_SETEXTENDEDLISTVIEWSTYLE,
                    LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES,
                    LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES);
@@ -468,6 +545,43 @@ void MainWindow::CreateChildren()
 
     showList_ = settings_.showFileList;
     ApplyListMode(false);       // 按设置决定文件列表框默认隐藏还是显示
+    ApplyTheme();
+}
+
+// 主题切换后把所有窗口重新上一次颜色。自绘的控件（时间线、日志、预览底栏、
+// 工具栏按钮）在画的时候才读调色板，重画即可；系统画的（列表、进度条、标题栏）
+// 需要重新设置颜色或窗口主题。
+void MainWindow::ApplyTheme()
+{
+    if (bgBrush_) ::DeleteObject(bgBrush_);
+    bgBrush_ = ::CreateSolidBrush(Theme::C().windowBg);
+
+    if (hwnd_) Theme::ApplyWindow(hwnd_, Theme::Dark());
+
+    if (list_)
+    {
+        Theme::ApplyListTheme(list_, Theme::Dark());
+        ListView_SetBkColor(list_, Theme::C().listBg);
+        ListView_SetTextBkColor(list_, Theme::C().listBg);
+        ListView_SetTextColor(list_, Theme::C().listText);
+        ::RedrawWindow(list_, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
+    }
+    if (progress_)
+    {
+        ::SendMessageW(progress_, PBM_SETBKCOLOR, 0, (LPARAM)Theme::C().progressBg);
+        ::SendMessageW(progress_, PBM_SETBARCOLOR, 0, (LPARAM)Theme::C().progressFill);
+    }
+
+    timeline_.SetTheme();
+    logView_.SetTheme();
+    preview_.SetTheme();
+
+    if (hwnd_)
+    {
+        ::InvalidateRect(hwnd_, nullptr, TRUE);
+        for (int i = 0; i < buttonCount_; ++i)
+            if (buttons_[i]) ::InvalidateRect(buttons_[i], nullptr, TRUE);
+    }
 }
 
 // 左侧显示方式：showList_ = true 显示文件列表框；false 时文件列表框隐藏，
@@ -899,6 +1013,17 @@ LRESULT MainWindow::WndProc(UINT msg, WPARAM wp, LPARAM lp)
         OnDropAdd((HDROP)wp);
         return 0;
 
+    case WM_DRAWITEM:
+    {
+        const DRAWITEMSTRUCT* dis = (const DRAWITEMSTRUCT*)lp;
+        if (dis && dis->CtlType == ODT_BUTTON)
+        {
+            Theme::DrawButton(dis);
+            return TRUE;
+        }
+        break;
+    }
+
     case WM_CTLCOLORSTATIC:
     {
         HDC dc = (HDC)wp;
@@ -906,12 +1031,12 @@ LRESULT MainWindow::WndProc(UINT msg, WPARAM wp, LPARAM lp)
         if (ctl == status_ || ctl == help_)
         {
             ::SetBkMode(dc, TRANSPARENT);
-            ::SetTextColor(dc, RGB(198, 204, 214));
+            ::SetTextColor(dc, Theme::C().text);
             // Kept identical to bgBrush_ on purpose: with TRANSPARENT the colour
             // itself is unused, but if anyone flips the mode to OPAQUE a mismatch
             // between this and the returned brush is exactly how a stale line
             // ends up surviving a repaint.
-            ::SetBkColor(dc, RGB(24, 26, 31));
+            ::SetBkColor(dc, Theme::C().windowBg);
             return (LRESULT)bgBrush_;
         }
         break;
@@ -1656,13 +1781,13 @@ void MainWindow::OnCommand(int id)
 
     case IDM_HELP_ABOUT:
         ::MessageBoxW(hwnd_,
-                      TR(L"FastVideoCut 1.5.1\n\n"
+                      TR(L"FastVideoCut 1.6.0\n\n"
                          L"用 ffmpeg 做后端的黑屏自动剪辑工具：\n"
                          L"  · 黑屏检测 blackdetect\n"
                          L"  · 帧流缩略图 tile 快速展开\n"
                          L"  · 无损剪切 -c copy + concat 合并\n\n"
                          L"界面: Win32 / C++ (VC++)    后端: ffmpeg.exe",
-                         L"FastVideoCut 1.5.1\n\n"
+                         L"FastVideoCut 1.6.0\n\n"
                          L"Black frame auto cutter built on ffmpeg:\n"
                          L"  - black frame detection (blackdetect)\n"
                          L"  - timeline thumbnails via tile mosaics\n"
@@ -1869,6 +1994,15 @@ namespace
             ::SendMessageW(dlg, WM_SETICON, ICON_BIG,
                            (LPARAM)::LoadIconW(nullptr, IDI_WARNING));
 
+            Theme::ApplyWindow(dlg, Theme::Dark());
+            const int mergeBtns[] = { IDC_MERGE_SMART, IDC_MERGE_CANCEL, IDC_MERGE_ANYWAY };
+            for (int i = 0; i < 3; ++i)
+                if (HWND b = ::GetDlgItem(dlg, mergeBtns[i]))
+                {
+                    LONG st = ::GetWindowLongW(b, GWL_STYLE);
+                    ::SetWindowLongW(b, GWL_STYLE, (st & ~(LONG)BS_TYPEMASK) | BS_OWNERDRAW);
+                }
+
             HWND smart  = ::GetDlgItem(dlg, IDC_MERGE_SMART);
             HWND cancel = ::GetDlgItem(dlg, IDC_MERGE_CANCEL);
             HWND anyway = ::GetDlgItem(dlg, IDC_MERGE_ANYWAY);
@@ -1921,6 +2055,28 @@ namespace
                 ::SendMessageW(dlg, DM_SETDEFID, IDC_MERGE_CANCEL, 0);
             }
             return TRUE;
+        }
+
+        case WM_DRAWITEM:
+        {
+            const DRAWITEMSTRUCT* dis = (const DRAWITEMSTRUCT*)lp;
+            if (dis && dis->CtlType == ODT_BUTTON)
+            {
+                Theme::DrawButton(dis);
+                return TRUE;
+            }
+            break;
+        }
+
+        case WM_CTLCOLORDLG:
+            return (INT_PTR)Theme::DlgBrush();
+
+        case WM_CTLCOLORSTATIC:
+        {
+            HDC dc = (HDC)wp;
+            Theme::SetupTextColor(dc);
+            ::SetBkColor(dc, Theme::C().dlgBg);
+            return (INT_PTR)Theme::DlgBrush();
         }
 
         case WM_COMMAND:
@@ -2316,6 +2472,17 @@ bool MainWindow::BuildOutputs(int job,
     enc.crf       = settings_.crf;
     enc.preset    = settings_.preset;
     enc.faststart = settings_.faststart;
+    if (enc.reencode)
+    {
+        // 自动模式在这里定下来（第一次会做一次硬件自检），日志里也记下实际
+        // 用的是哪个编码器：导出失败时这是第一个要看的信息。
+        int asked = settings_.encoder;
+        if (asked < 0 || asked > 4) asked = 0;
+        enc.encoder = ffmpeg_.ResolveEncoder((VideoEncoder)asked);
+        PostUiMessage(hwnd_, UiLog,
+                      FormatString(TR(L"视频编码器：%s", L"Video encoder: %s"),
+                                   Utf8ToWide(EncoderCodecName(enc.encoder)).c_str()));
+    }
 
     std::wstring outDir = PreferredOutputDir();
     if (!EnsureDirectory(outDir))
@@ -2661,6 +2828,7 @@ void MainWindow::ShowSettingsDialog()
 {
     const AppLang oldLang    = settings_.lang;
     const bool    oldThumbs  = settings_.makeThumbs;
+    const AppTheme oldTheme  = settings_.theme;
     const std::wstring oldFfDir = settings_.ffmpegDir;
     if (ShowSettingsDialogModal(hwnd_, settings_, ffmpeg_))
     {
@@ -2674,6 +2842,14 @@ void MainWindow::ShowSettingsDialog()
             Loc::Apply(settings_.lang);
             ApplyLanguage();
             AppendLog(FormatString(L"界面语言：%s", Loc::Describe(settings_.lang).c_str()));
+        }
+        if (settings_.theme != oldTheme)
+        {
+            // 主题同样是即时生效：改调色板后让所有窗口重画一遍
+            Theme::SetMode(settings_.theme);
+            ApplyTheme();
+            AppendLog(Theme::Dark() ? TR(L"界面主题：深色", L"Theme: dark")
+                                    : TR(L"界面主题：浅色", L"Theme: light"));
         }
         // 用户刚在设置里改了 ffmpeg 目录：立刻按新目录重定位，并给一句明确反馈。
         // 否则“设置里填好了，按钮还是灰的”会让人以为设置没生效。

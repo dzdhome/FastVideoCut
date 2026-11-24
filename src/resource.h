@@ -135,3 +135,7 @@
 #define IDC_SET_LB_SOUND       42045   // “---- 提示音 ----” 分组标签
 #define IDC_SET_SOUNDDETECT    42046   // 全部分析完成后响“叮铃铃”
 #define IDC_SET_SOUNDEXPORT    42047   // 导出完成后响“叮咚咚”
+#define IDC_SET_LB_THEME       42060   // 界面主题标签
+#define IDC_SET_THEME          42061   // 界面主题下拉框
+#define IDC_SET_LB_ENCODER     42062   // 视频编码器标签
+#define IDC_SET_ENCODER        42063   // 视频编码器下拉框

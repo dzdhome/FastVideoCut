@@ -137,9 +137,16 @@ bool LoadSettings(AppSettings& s)
     if (lang < 0 || lang > 2) lang = 0;
     s.lang           = (AppLang)lang;
 
+    int theme = IniGetInt(f, L"ui", L"theme", (int)s.theme);
+    if (theme < 0 || theme > 2) theme = (int)s.theme;
+    s.theme = (AppTheme)theme;
+
     s.reencodeExport      = IniGetBool(f, L"export", L"reencode", s.reencodeExport);
     s.mergeReencode       = IniGetBool(f, L"export", L"mergeReencode", s.mergeReencode);
     s.crf                 = IniGetInt(f, L"export", L"crf", s.crf);
+    int encoder = IniGetInt(f, L"export", L"encoder", s.encoder);
+    if (encoder < 0 || encoder > 4) encoder = 0;
+    s.encoder             = encoder;
     s.faststart           = IniGetBool(f, L"export", L"faststart", s.faststart);
     s.confirmBeforeExport = IniGetBool(f, L"export", L"confirm", s.confirmBeforeExport);
 
@@ -191,6 +198,7 @@ bool SaveSettings(const AppSettings& s)
     // 合并文件名不再有设置项（按首尾视频自动生成），无需迁移
     IniSetString(f, L"export", L"preset", Utf8ToWide(tmp.preset));
     IniSetInt(f, L"export", L"crf", tmp.crf);
+    IniSetInt(f, L"export", L"encoder", tmp.encoder);
     IniSetBool(f, L"export", L"reencode", tmp.reencodeExport);
     IniSetBool(f, L"export", L"mergeReencode", tmp.mergeReencode);
     IniSetBool(f, L"export", L"faststart", tmp.faststart);
@@ -211,6 +219,7 @@ bool SaveSettings(const AppSettings& s)
     IniSetBool(f, L"ui", L"showFileList", tmp.showFileList);
     IniSetBool(f, L"ui", L"makeThumbs", tmp.makeThumbs);
     IniSetInt(f, L"ui", L"lang", (int)tmp.lang);
+    IniSetInt(f, L"ui", L"theme", (int)tmp.theme);
     IniSetString(f, L"ui", L"lastAddDir", tmp.lastAddDir);
 
     IniSetBool(f, L"sound", L"detectDone", tmp.soundDetectDone);
